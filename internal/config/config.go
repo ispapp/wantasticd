@@ -1,188 +1,182 @@
 package config
 
 import (
-	"bufio"
-	"encoding/base64"
-	"errors"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
-	"path/filepath"
-	"strings"
+	"time"
+	"wantastic-agent/internal/grpc"
+
+	"github.com/denisbrodbeck/machineid"
+	"github.com/google/uuid"
 )
 
-type Interface struct {
-	PrivateKey string
-	ListenPort int
-	Addresses  []netip.Prefix
-}
-
-type Peer struct {
-	PublicKey           string
-	PresharedKey        string
-	Endpoint            string
-	AllowedIPs          []netip.Prefix
-	PersistentKeepalive int
-}
-
 type Config struct {
-	Interface Interface
-	Peers     []Peer
-	Raw       string
+	DeviceID   string    `json:"device_id"`
+	TenantID   string    `json:"tenant_id"`
+	PrivateKey string    `json:"private_key"`
+	PublicKey  string    `json:"public_key"`
+	Server     Server    `json:"server"`
+	Interface  Interface `json:"interface"`
+	ExitNode   ExitNode  `json:"exit_node"`
+	Auth       Auth      `json:"auth"`
 }
 
-func Load(path string) (Config, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return Config{}, err
-	}
-	cfg, err := Parse(string(data))
-	if err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
+type Server struct {
+	Endpoint  string `json:"endpoint"`
+	Port      int    `json:"port"`
+	PublicKey string `json:"public_key"`
 }
 
-func Parse(s string) (Config, error) {
+type Interface struct {
+	Addresses  []netip.Prefix `json:"addresses"`
+	ListenPort int            `json:"listen_port"`
+	MTU        int            `json:"mtu"`
+}
+
+type ExitNode struct {
+	Enabled  bool     `json:"enabled"`
+	Routes   []string `json:"routes"`
+	DNS      []string `json:"dns"`
+	AllowLAN bool     `json:"allow_lan"`
+}
+
+type Auth struct {
+	ServerURL   string        `json:"server_url"`
+	Token       string        `json:"token"`
+	RefreshTime time.Duration `json:"refresh_time"`
+}
+
+func LoadFromFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config file: %w", err)
+	}
+
 	var cfg Config
-	var section string
-	var current Peer
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
 
-	scanner := bufio.NewScanner(strings.NewReader(s))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			if section == "Peer" {
-				cfg.Peers = append(cfg.Peers, current)
-				current = Peer{}
-			}
-			section = strings.Trim(line, "[]")
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			return Config{}, fmt.Errorf("invalid line: %q", line)
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		switch section {
-		case "Interface":
-			switch strings.ToLower(key) {
-			case "privatekey":
-				cfg.Interface.PrivateKey = val
-			case "listenport":
-				var p int
-				_, err := fmt.Sscanf(val, "%d", &p)
-				if err != nil {
-					return Config{}, fmt.Errorf("invalid listen port: %w", err)
-				}
-				cfg.Interface.ListenPort = p
-			case "address":
-				addrs := splitCSV(val)
-				for _, a := range addrs {
-					prefix, err := netip.ParsePrefix(strings.TrimSpace(a))
-					if err != nil {
-						return Config{}, fmt.Errorf("invalid address %q: %w", a, err)
-					}
-					cfg.Interface.Addresses = append(cfg.Interface.Addresses, prefix)
-				}
-			}
-		case "Peer":
-			switch strings.ToLower(key) {
-			case "publickey":
-				current.PublicKey = val
-			case "presharedkey":
-				current.PresharedKey = val
-			case "endpoint":
-				current.Endpoint = val
-			case "allowedips":
-				ips := splitCSV(val)
-				for _, ip := range ips {
-					prefix, err := netip.ParsePrefix(strings.TrimSpace(ip))
-					if err != nil {
-						return Config{}, fmt.Errorf("invalid allowed ip %q: %w", ip, err)
-					}
-					current.AllowedIPs = append(current.AllowedIPs, prefix)
-				}
-			case "persistentkeepalive":
-				var v int
-				_, err := fmt.Sscanf(val, "%d", &v)
-				if err != nil {
-					return Config{}, fmt.Errorf("invalid persistent keepalive: %w", err)
-				}
-				current.PersistentKeepalive = v
-			}
-		default:
-			return Config{}, fmt.Errorf("unexpected section %q", section)
-		}
-	}
-	if section == "Peer" {
-		cfg.Peers = append(cfg.Peers, current)
-	}
-	cfg.Raw = s
-	if err := scanner.Err(); err != nil {
-		return Config{}, err
-	}
 	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+		return nil, fmt.Errorf("validate config: %w", err)
 	}
+
+	return &cfg, nil
+}
+
+func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) {
+	client, err := grpc.New(serverURL, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("create grpc client: %w", err)
+	}
+	defer client.Close()
+
+	resp, err := client.StartDeviceFlow(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("start device flow: %w", err)
+	}
+
+	cfg := &Config{}
+	if err := cfg.UpdateFromGRPC(resp); err != nil {
+		return nil, fmt.Errorf("update config from grpc: %w", err)
+	}
+
 	return cfg, nil
 }
 
-func splitCSV(s string) []string {
-	fields := strings.Split(s, ",")
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		trimmed := strings.TrimSpace(f)
-		if trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
+func LoadFromToken(ctx context.Context, token string) (*Config, error) {
+	return nil, fmt.Errorf("token loading not implemented yet")
 }
 
-func (c Config) Validate() error {
-	if c.Interface.PrivateKey == "" {
-		return errors.New("interface private key required")
+func (c *Config) Validate() error {
+	if c.PrivateKey == "" {
+		return fmt.Errorf("private key required")
 	}
-	if err := validateKey(c.Interface.PrivateKey); err != nil {
-		return fmt.Errorf("invalid interface private key: %w", err)
+	if c.Server.Endpoint == "" {
+		return fmt.Errorf("server endpoint required")
 	}
-	if c.Interface.ListenPort <= 0 || c.Interface.ListenPort > 65535 {
-		return errors.New("listen port must be 1-65535")
+	if c.Server.Port == 0 {
+		c.Server.Port = 51820
 	}
-	if len(c.Interface.Addresses) == 0 {
-		return errors.New("at least one interface address required")
+	if c.Interface.MTU == 0 {
+		c.Interface.MTU = 1420
 	}
-	if len(c.Peers) == 0 {
-		return errors.New("at least one peer required")
+	if c.Interface.ListenPort == 0 {
+		c.Interface.ListenPort = 51820
 	}
-	for i, p := range c.Peers {
-		if err := validateKey(p.PublicKey); err != nil {
-			return fmt.Errorf("peer %d public key: %w", i, err)
-		}
-		if p.PresharedKey != "" {
-			if err := validateKey(p.PresharedKey); err != nil {
-				return fmt.Errorf("peer %d preshared key: %w", i, err)
-			}
-		}
-		if len(p.AllowedIPs) == 0 {
-			return fmt.Errorf("peer %d requires at least one allowed IP", i)
-		}
+	if c.Auth.RefreshTime == 0 {
+		c.Auth.RefreshTime = 24 * time.Hour
 	}
 	return nil
 }
 
-func validateKey(s string) error {
-	b, err := base64.StdEncoding.DecodeString(s)
+func (c *Config) GenerateDeviceID() {
+	if c.DeviceID != "" {
+		return
+	}
+
+	// Generate a stable, anonymous device ID.
+	id, err := machineid.ProtectedID("wantastic")
 	if err != nil {
-		return err
+		log.Printf("Warning: could not generate a stable device ID, falling back to a random one. This device may be re-registered if the configuration is lost. Error: %v", err)
+		c.DeviceID = uuid.New().String()
+		return
 	}
-	if len(b) != 32 {
-		return fmt.Errorf("expected 32 bytes, got %d", len(b))
+
+	// Hash the ID to protect privacy.
+	hash := sha256.Sum256([]byte(id))
+	c.DeviceID = hex.EncodeToString(hash[:])
+}
+
+func (c *Config) SaveToFile(path string) error {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
 	}
+
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Config) UpdateFromGRPC(resp *grpc.GetConfigurationResponse) error {
+	if resp.DeviceConfig != nil {
+		for _, addr := range resp.DeviceConfig.Addresses {
+			prefix, err := netip.ParsePrefix(addr)
+			if err != nil {
+				return fmt.Errorf("parse address %s: %w", addr, err)
+			}
+			c.Interface.Addresses = append(c.Interface.Addresses, prefix)
+		}
+		c.Interface.ListenPort = int(resp.DeviceConfig.ListenPort)
+		c.Interface.MTU = int(resp.DeviceConfig.MTU)
+		c.ExitNode.DNS = resp.DeviceConfig.DNS
+	}
+
+	if resp.ServerConfig != nil {
+		c.Server.Endpoint = resp.ServerConfig.Endpoint
+		c.Server.Port = int(resp.ServerConfig.Port)
+		c.Server.PublicKey = resp.ServerConfig.PublicKey
+	}
+
+	if resp.NetworkConfig != nil {
+		c.ExitNode.Routes = resp.NetworkConfig.Routes
+	}
+
+	if resp.ExitNodeConfig != nil {
+		c.ExitNode.Enabled = resp.ExitNodeConfig.Enabled
+		c.ExitNode.Routes = append(c.ExitNode.Routes, resp.ExitNodeConfig.ExitRoutes...)
+		c.ExitNode.DNS = append(c.ExitNode.DNS, resp.ExitNodeConfig.ExitDNS...)
+		c.ExitNode.AllowLAN = resp.ExitNodeConfig.AllowLAN
+	}
+
 	return nil
 }

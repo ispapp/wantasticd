@@ -1,4 +1,4 @@
-# wantastic-wgclient
+# wantastic-agent
 wantastic custom userspace wireguard client
 
 Planned CLI commands:
