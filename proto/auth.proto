@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package grpc;
+
+option go_package = "wantastic-agent/internal/grpc";
+
+// AuthService provides authentication and configuration services for devices
+service AuthService {
+  // RegisterDevice registers a new device with the authentication server
+  rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+  
+  // RefreshToken refreshes an existing authentication token
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  
+  // GetConfiguration retrieves the current configuration for a device
+  rpc GetConfiguration(GetConfigurationRequest) returns (GetConfigurationResponse);
+  
+  // StartDeviceFlow initiates a device authorization flow
+  rpc StartDeviceFlow(StartDeviceFlowRequest) returns (StartDeviceFlowResponse);
+  
+  // PollDeviceFlow polls for completion of a device authorization flow
+  rpc PollDeviceFlow(PollDeviceFlowRequest) returns (PollDeviceFlowResponse);
+}
+
+// RegisterDeviceRequest contains device registration information
+message RegisterDeviceRequest {
+  string device_id = 1;
+  string public_key = 2;
+  string tenant_id = 3;
+}
+
+// RegisterDeviceResponse contains the registration result and configuration
+message RegisterDeviceResponse {
+  bool success = 1;
+  string token = 2;
+  string server_key = 3;
+  string endpoint = 4;
+  repeated string allowed_ips = 5;
+  int32 persistent_keepalive = 6;
+  repeated string dns_servers = 7;
+  repeated string forwarding_rules = 8;
+  repeated string routes = 9;
+  int32 mtu = 10;
+  int32 listen_port = 11;
+}
+
+// RefreshTokenRequest contains token refresh information
+message RefreshTokenRequest {
+  string device_id = 1;
+  string token = 2;
+}
+
+// RefreshTokenResponse contains the token refresh result
+message RefreshTokenResponse {
+  bool success = 1;
+  string token = 2;
+}
+
+// GetConfigurationRequest contains configuration retrieval information
+message GetConfigurationRequest {
+  string device_id = 1;
+  string token = 2;
+}
+
+// GetConfigurationResponse contains the device configuration
+message GetConfigurationResponse {
+  DeviceConfiguration device_config = 1;
+  ServerConfiguration server_config = 2;
+  NetworkConfiguration network_config = 3;
+  ExitNodeConfiguration exit_node_config = 4;
+  bool update_available = 5;
+  string update_version = 6;
+  string update_url = 7;
+}
+
+// DeviceConfiguration contains device-specific network settings
+message DeviceConfiguration {
+  repeated string addresses = 1;
+  int32 listen_port = 2;
+  int32 mtu = 3;
+  repeated string dns = 4;
+}
+
+// ServerConfiguration contains server connection settings
+message ServerConfiguration {
+  string endpoint = 1;
+  int32 port = 2;
+  string public_key = 3;
+  repeated string allowed_ips = 4;
+  int32 persistent_keepalive = 5;
+}
+
+// NetworkConfiguration contains network routing and firewall settings
+message NetworkConfiguration {
+  repeated string routes = 1;
+  repeated string forwarding_rules = 2;
+  repeated string firewall_rules = 3;
+}
+
+// ExitNodeConfiguration contains exit node settings
+message ExitNodeConfiguration {
+  bool enabled = 1;
+  repeated string exit_routes = 2;
+  repeated string exit_dns = 3;
+  bool allow_lan = 4;
+}
+
+// StartDeviceFlowRequest initiates a device authorization flow
+message StartDeviceFlowRequest {
+  string device_id = 1;
+}
+
+// StartDeviceFlowResponse contains device flow information
+message StartDeviceFlowResponse {
+  string device_code = 1;
+  string user_code = 2;
+  string verification_uri = 3;
+  int32 expires_in = 4;
+  int32 interval = 5;
+}
+
+// PollDeviceFlowRequest polls for device flow completion
+message PollDeviceFlowRequest {
+  string device_code = 1;
+}
+
+// PollDeviceFlowResponse indicates device flow completion status
+message PollDeviceFlowResponse {
+  bool success = 1;
+}

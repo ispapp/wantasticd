@@ -17,6 +17,10 @@ TARGETS := \
 	linux/arm \
 	windows/amd64
 
+# Demo server parameters
+DEMO_BINARY_NAME=demoserver
+DEMO_CMD_PATH=./cmd/demoserver
+
 all: build
 
 build:
@@ -52,6 +56,14 @@ clean:
 run:
 	$(GOBUILD) -o bin/$(BINARY_NAME) $(CMD_PATH)
 	./bin/$(BINARY_NAME)
+
+# Demo server targets
+build-demo:
+	$(GOBUILD) -o bin/$(DEMO_BINARY_NAME) $(DEMO_CMD_PATH)
+
+run-demo:
+	$(GOBUILD) -o bin/$(DEMO_BINARY_NAME) $(DEMO_CMD_PATH)
+	./bin/$(DEMO_BINARY_NAME)
 
 test:
 	$(GOTEST) -v ./...
