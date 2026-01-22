@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -8,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -17,6 +17,9 @@ import (
 
 	"golang.org/x/sys/cpu"
 )
+
+//go:embed view.tmpl
+var viewsFS embed.FS
 
 // Server provides metrics and statistics about the device
 type Server struct {
@@ -196,7 +199,6 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	// Parse and execute the template
-	tmplPath := filepath.Join("internal", "stats", "view.tmpl")
 	tmpl, err := template.New("view.tmpl").Funcs(template.FuncMap{
 		"div": func(a, b any) float64 {
 			toFloat := func(v any) float64 {
@@ -219,7 +221,7 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 			}
 			return toFloat(a) / toFloat(b)
 		},
-	}).ParseFiles(tmplPath)
+	}).ParseFS(viewsFS, "view.tmpl")
 	if err != nil {
 		log.Printf("Error parsing template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

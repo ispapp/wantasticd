@@ -20,12 +20,14 @@ jobs:
 
     - name: Build
       run: |
+        export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
         export CGO_ENABLED=0
         go build -v -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o wantasticd-${{ matrix.goarch }} ./cmd/wantasticd
 
     - name: Package
       run: |
+        export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
         BINARY_NAME="wantasticd-${GOARCH}"
         cp install.sh "${BINARY_NAME}-install.sh"
@@ -34,6 +36,6 @@ jobs:
 
     - name: Upload Release Asset
       run: |
-        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goarch }}.tar.gz --clobber
+        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

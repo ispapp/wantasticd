@@ -10,6 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"os/exec"
+	"runtime"
+
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/grpc"
 
@@ -66,16 +69,54 @@ func (d *Device) Start() error {
 		addrs[i] = prefix.Addr()
 	}
 
-	tunDev, netstack, err := netstack.CreateNetTUN(addrs, nil, d.config.Interface.MTU)
+	tunDev, err := tun.CreateTUN("wantastic", d.config.Interface.MTU)
 	if err != nil {
-		return fmt.Errorf("create netstack tun: %w", err)
+		return fmt.Errorf("create tun: %w", err)
 	}
 
 	d.tunDev = tunDev
-	d.netstack = netstack
+	d.netstack = nil // Not using userspace netstack anymore
+
+	// Configure IP address on the interface
+	realName, err := tunDev.Name()
+	if err != nil {
+		tunDev.Close()
+		return fmt.Errorf("get tun name: %w", err)
+	}
+
+	if len(addrs) > 0 {
+		addr := addrs[0]
+		if runtime.GOOS == "darwin" {
+			// macOS: ifconfig <interface> <ip> <ip> up
+			// For point-to-point, destination address is required. Use same IP or broadcast?
+			// WireGuard-go usually uses destination address same as local IP for /32
+			cmd := exec.Command("ifconfig", realName, addr.String(), addr.String(), "up")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log.Printf("Failed to configure interface: %v, output: %s", err, out)
+				// Don't fail hard, maybe it works anyway?
+			}
+
+			// Add route for the interface subnet if needed?
+			// Usually WireGuard handles routing via AllowedIPs -> System Route table changes?
+			// WireGuard-go DOES NOT change system routing table automatically.
+			// We need to add routes.
+			// For now, let's just get the interface UP with an IP.
+		} else if runtime.GOOS == "linux" {
+			// Linux: ip addr add <ip>/<cidr> dev <interface>
+			//        ip link set up dev <interface>
+			cmd := exec.Command("ip", "addr", "add", d.config.Interface.Addresses[0].String(), "dev", realName)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log.Printf("Failed to add address: %v, output: %s", err, out)
+			}
+			cmdUp := exec.Command("ip", "link", "set", "up", "dev", realName)
+			if out, err := cmdUp.CombinedOutput(); err != nil {
+				log.Printf("Failed to set up: %v, output: %s", err, out)
+			}
+		}
+	}
 
 	if d.config.Verbose {
-		log.Printf("Netstack TUN device created successfully with %d addresses", len(addrs))
+		log.Printf("System TUN device %s created successfully", realName)
 	}
 
 	logLevel := 1 // device.LogLevelError
