@@ -1,20 +1,63 @@
 package config
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 	"wantastic-agent/internal/grpc"
 
 	"github.com/denisbrodbeck/machineid"
 	"github.com/google/uuid"
 )
+
+// resolveEndpoint resolves a hostname to an IP address using Cloudflare DNS (1.1.1.1:53)
+func resolveEndpoint(hostname string) (string, error) {
+	// Check if it's already an IP address
+	if ip := net.ParseIP(hostname); ip != nil {
+		return hostname, nil
+	}
+
+	// Create a custom resolver using Cloudflare DNS
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{}
+			return d.DialContext(ctx, "udp", "1.1.1.1:53")
+		},
+	}
+
+	// Resolve the hostname
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ips, err := resolver.LookupIPAddr(ctx, hostname)
+	if err != nil {
+		return "", fmt.Errorf("resolve hostname %s: %w", hostname, err)
+	}
+
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no IP addresses found for hostname %s", hostname)
+	}
+
+	// Return the first IPv4 address if available, otherwise first IPv6
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			return ip.IP.String(), nil
+		}
+	}
+
+	// If no IPv4, return the first IPv6
+	return ips[0].IP.String(), nil
+}
 
 type Config struct {
 	DeviceID   string    `json:"device_id"`
@@ -23,43 +66,54 @@ type Config struct {
 	PublicKey  string    `json:"public_key"`
 	Server     Server    `json:"server"`
 	Interface  Interface `json:"interface"`
-	ExitNode   ExitNode  `json:"exit_node"`
 	Auth       Auth      `json:"auth"`
+	Verbose    bool      `json:"verbose"`
 }
 
 type Server struct {
-	Endpoint  string `json:"endpoint"`
-	Port      int    `json:"port"`
-	PublicKey string `json:"public_key"`
+	Endpoint            string   `json:"endpoint"`
+	Port                int      `json:"port"`
+	PublicKey           string   `json:"public_key"`
+	AllowedIPs          []string `json:"allowed_ips"`
+	PersistentKeepalive int      `json:"persistent_keepalive"`
 }
 
 type Interface struct {
 	Addresses  []netip.Prefix `json:"addresses"`
 	ListenPort int            `json:"listen_port"`
 	MTU        int            `json:"mtu"`
+	DNS        []string       `json:"dns"`
 }
 
-type ExitNode struct {
-	Enabled  bool     `json:"enabled"`
-	Routes   []string `json:"routes"`
-	DNS      []string `json:"dns"`
-	AllowLAN bool     `json:"allow_lan"`
-}
-
+// Auth holds the authentication credentials for the agent.
 type Auth struct {
 	ServerURL   string        `json:"server_url"`
 	Token       string        `json:"token"`
 	RefreshTime time.Duration `json:"refresh_time"`
 }
 
+// LoadFromFile loads the configuration from a file.
+// It first attempts to parse the file as JSON.
+// If that fails, it tries to parse it as a traditional WireGuard configuration file.
+// Returns a pointer to the Config struct if successful, or an error if any step fails.
 func LoadFromFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config file: %w", err)
 	}
 
+	// Try to parse as JSON first
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err == nil {
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("validate config: %w", err)
+		}
+		return &cfg, nil
+	}
+
+	// If JSON parsing fails, try to parse as traditional WireGuard config
+	cfg, err = parseTraditionalWireGuardConfig(string(data))
+	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
@@ -68,6 +122,117 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// parseTraditionalWireGuardConfig parses traditional WireGuard INI-style configuration
+func parseTraditionalWireGuardConfig(configData string) (Config, error) {
+	var cfg Config
+	scanner := bufio.NewScanner(strings.NewReader(configData))
+
+	currentSection := ""
+	peerPublicKey := ""
+	peerEndpoint := ""
+	peerAllowedIPs := []string{}
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip comments and empty lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Check for section headers
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.Trim(line, "[]")
+			continue
+		}
+
+		// Parse key-value pairs
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch currentSection {
+		case "Interface":
+			switch key {
+			case "PrivateKey":
+				cfg.PrivateKey = value
+			case "Address":
+				// Convert CIDR address to netip.Prefix
+				if prefix, err := netip.ParsePrefix(value); err == nil {
+					cfg.Interface.Addresses = []netip.Prefix{prefix}
+				}
+			case "ListenPort":
+				if port, err := fmt.Sscanf(value, "%d", &cfg.Interface.ListenPort); err == nil && port == 1 {
+					// Port parsed successfully
+				}
+			case "MTU":
+				if mtu, err := fmt.Sscanf(value, "%d", &cfg.Interface.MTU); err == nil && mtu == 1 {
+					// MTU parsed successfully
+				}
+			case "DNS":
+				// Parse DNS servers from traditional WireGuard config
+				dnsServers := strings.Split(value, ",")
+				for i := range dnsServers {
+					dnsServers[i] = strings.TrimSpace(dnsServers[i])
+				}
+				// Store DNS servers in Interface configuration for netstack to use
+				cfg.Interface.DNS = dnsServers
+				log.Printf("Configured DNS servers: %v", dnsServers)
+			}
+
+		case "Peer":
+			switch key {
+			case "PublicKey":
+				peerPublicKey = value
+			case "Endpoint":
+				peerEndpoint = value
+			case "AllowedIPs":
+				peerAllowedIPs = strings.Split(value, ",")
+				for i := range peerAllowedIPs {
+					peerAllowedIPs[i] = strings.TrimSpace(peerAllowedIPs[i])
+				}
+			case "PersistentKeepalive":
+				if keepalive, err := fmt.Sscanf(value, "%d", &cfg.Server.PersistentKeepalive); err == nil && keepalive == 1 {
+					// Keepalive parsed successfully
+				}
+			}
+		}
+	}
+
+	// Extract server information from peer section
+	if peerPublicKey != "" {
+		cfg.Server.PublicKey = peerPublicKey
+	}
+
+	if peerEndpoint != "" {
+		// Parse endpoint (format: host:port)
+		if parts := strings.Split(peerEndpoint, ":"); len(parts) == 2 {
+			cfg.Server.Endpoint = parts[0]
+			if port, err := fmt.Sscanf(parts[1], "%d", &cfg.Server.Port); err == nil && port == 1 {
+				// Port parsed successfully
+			}
+		} else {
+			cfg.Server.Endpoint = peerEndpoint
+			cfg.Server.Port = 51820 // Default WireGuard port
+		}
+	}
+
+	if len(peerAllowedIPs) > 0 {
+		cfg.Server.AllowedIPs = peerAllowedIPs
+	}
+
+	// Generate device ID if not set
+	if cfg.DeviceID == "" {
+		cfg.GenerateDeviceID()
+	}
+
+	return cfg, nil
 }
 
 func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) {
@@ -90,10 +255,18 @@ func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) 
 	return cfg, nil
 }
 
+// LoadFromToken loads the configuration from a token.
+// It first attempts to parse the token as JSON.
+// If that fails, it returns an error indicating that token loading is not implemented yet.
 func LoadFromToken(ctx context.Context, token string) (*Config, error) {
+	// TODO: Implement token loading
 	return nil, fmt.Errorf("token loading not implemented yet")
 }
 
+// Validate validates the configuration.
+// It checks if the private key, server endpoint, and server port are set.
+// If the server endpoint is not an IP address, it attempts to resolve it.
+// If any validation fails, it returns an error with a descriptive message.
 func (c *Config) Validate() error {
 	if c.PrivateKey == "" {
 		return fmt.Errorf("private key required")
@@ -101,6 +274,16 @@ func (c *Config) Validate() error {
 	if c.Server.Endpoint == "" {
 		return fmt.Errorf("server endpoint required")
 	}
+
+	// Resolve hostname to IP address if it's not already an IP
+	if net.ParseIP(c.Server.Endpoint) == nil {
+		resolvedIP, err := resolveEndpoint(c.Server.Endpoint)
+		if err != nil {
+			return fmt.Errorf("failed to resolve endpoint %s: %w", c.Server.Endpoint, err)
+		}
+		c.Server.Endpoint = resolvedIP
+	}
+
 	if c.Server.Port == 0 {
 		c.Server.Port = 51820
 	}
@@ -134,6 +317,10 @@ func (c *Config) GenerateDeviceID() {
 	c.DeviceID = hex.EncodeToString(hash[:])
 }
 
+// SaveToFile saves the configuration to a file.
+// It marshals the configuration to JSON with indentation and writes it to the specified path.
+// The file is created with permissions 0600, which restricts access to the owner only.
+// Returns an error if any step of the process fails.
 func (c *Config) SaveToFile(path string) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -147,6 +334,10 @@ func (c *Config) SaveToFile(path string) error {
 	return nil
 }
 
+// UpdateFromGRPC updates the configuration from a GRPC response.
+// It populates the interface addresses, listen port, and MTU from the device config.
+// It also populates the server endpoint, port, and public key from the server config.
+// Returns an error if any step of the process fails.
 func (c *Config) UpdateFromGRPC(resp *grpc.GetConfigurationResponse) error {
 	if resp.DeviceConfig != nil {
 		for _, addr := range resp.DeviceConfig.Addresses {
@@ -158,24 +349,12 @@ func (c *Config) UpdateFromGRPC(resp *grpc.GetConfigurationResponse) error {
 		}
 		c.Interface.ListenPort = int(resp.DeviceConfig.ListenPort)
 		c.Interface.MTU = int(resp.DeviceConfig.MTU)
-		c.ExitNode.DNS = resp.DeviceConfig.DNS
 	}
 
 	if resp.ServerConfig != nil {
 		c.Server.Endpoint = resp.ServerConfig.Endpoint
 		c.Server.Port = int(resp.ServerConfig.Port)
 		c.Server.PublicKey = resp.ServerConfig.PublicKey
-	}
-
-	if resp.NetworkConfig != nil {
-		c.ExitNode.Routes = resp.NetworkConfig.Routes
-	}
-
-	if resp.ExitNodeConfig != nil {
-		c.ExitNode.Enabled = resp.ExitNodeConfig.Enabled
-		c.ExitNode.Routes = append(c.ExitNode.Routes, resp.ExitNodeConfig.ExitRoutes...)
-		c.ExitNode.DNS = append(c.ExitNode.DNS, resp.ExitNodeConfig.ExitDNS...)
-		c.ExitNode.AllowLAN = resp.ExitNodeConfig.AllowLAN
 	}
 
 	return nil

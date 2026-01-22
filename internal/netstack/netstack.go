@@ -36,7 +36,7 @@ func New(cfg *config.Config) (*Netstack, error) {
 	return &Netstack{
 		config: cfg,
 		dns: &DNSResolver{
-			servers: cfg.ExitNode.DNS,
+			servers: cfg.Interface.DNS, // Use DNS servers from configuration
 		},
 		router: &Router{
 			routes: make(map[string]netip.Prefix),
@@ -52,12 +52,6 @@ func (ns *Netstack) Start() error {
 	}
 	ns.running = true
 	ns.mu.Unlock()
-
-	if ns.config.ExitNode.Enabled {
-		if err := ns.setupExitNode(); err != nil {
-			return fmt.Errorf("setup exit node: %w", err)
-		}
-	}
 
 	return nil
 }
@@ -77,35 +71,10 @@ func (ns *Netstack) Stop() error {
 	return nil
 }
 
-func (ns *Netstack) setupExitNode() error {
-	log.Println("Setting up exit node functionality")
-
-	for _, route := range ns.config.ExitNode.Routes {
-		prefix, err := netip.ParsePrefix(route)
-		if err != nil {
-			return fmt.Errorf("parse route %s: %w", route, err)
-		}
-		ns.router.routes[route] = prefix
-		log.Printf("Added exit route: %s", route)
-	}
-
-	if len(ns.config.ExitNode.DNS) > 0 {
-		log.Printf("Configured DNS servers: %v", ns.config.ExitNode.DNS)
-	}
-
-	return nil
-}
-
 func (ns *Netstack) SetNet(net *netstack.Net) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 	ns.net = net
-}
-
-func (ns *Netstack) IsExitNode() bool {
-	ns.mu.RLock()
-	defer ns.mu.RUnlock()
-	return ns.config.ExitNode.Enabled
 }
 
 func (ns *Netstack) GetRoutes() []string {
@@ -157,25 +126,5 @@ func (ns *Netstack) UpdateNetworkConfig(config *grpc.NetworkConfiguration) error
 	ns.router.mu.Unlock()
 
 	log.Println("Network configuration updated successfully")
-	return nil
-}
-
-func (ns *Netstack) UpdateExitNodeConfig(config *grpc.ExitNodeConfiguration) error {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
-	log.Printf("Updating exit node configuration: enabled=%v, exit_routes=%v, exit_dns=%v, allow_lan=%v",
-		config.Enabled, config.ExitRoutes, config.ExitDNS, config.AllowLAN)
-
-	ns.config.ExitNode.Enabled = config.Enabled
-	ns.config.ExitNode.Routes = config.ExitRoutes
-	ns.config.ExitNode.DNS = config.ExitDNS
-	ns.config.ExitNode.AllowLAN = config.AllowLAN
-
-	if config.Enabled {
-		return ns.setupExitNode()
-	}
-
-	log.Println("Exit node configuration updated successfully")
 	return nil
 }

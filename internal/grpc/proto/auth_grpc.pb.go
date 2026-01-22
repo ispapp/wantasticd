@@ -8,6 +8,7 @@ package grpc
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -164,7 +165,7 @@ func RegisterAuthServiceServer(s grpc.ServiceRegistrar, srv AuthServiceServer) {
 	s.RegisterService(&AuthService_ServiceDesc, srv)
 }
 
-func _AuthService_RegisterDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_RegisterDevice_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(RegisterDeviceRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -176,13 +177,13 @@ func _AuthService_RegisterDevice_Handler(srv interface{}, ctx context.Context, d
 		Server:     srv,
 		FullMethod: AuthService_RegisterDevice_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).RegisterDevice(ctx, req.(*RegisterDeviceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthService_RefreshToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_RefreshToken_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(RefreshTokenRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -194,13 +195,13 @@ func _AuthService_RefreshToken_Handler(srv interface{}, ctx context.Context, dec
 		Server:     srv,
 		FullMethod: AuthService_RefreshToken_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).RefreshToken(ctx, req.(*RefreshTokenRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthService_GetConfiguration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_GetConfiguration_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(GetConfigurationRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -212,13 +213,13 @@ func _AuthService_GetConfiguration_Handler(srv interface{}, ctx context.Context,
 		Server:     srv,
 		FullMethod: AuthService_GetConfiguration_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).GetConfiguration(ctx, req.(*GetConfigurationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthService_StartDeviceFlow_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_StartDeviceFlow_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(StartDeviceFlowRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -230,13 +231,13 @@ func _AuthService_StartDeviceFlow_Handler(srv interface{}, ctx context.Context, 
 		Server:     srv,
 		FullMethod: AuthService_StartDeviceFlow_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).StartDeviceFlow(ctx, req.(*StartDeviceFlowRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthService_PollDeviceFlow_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_PollDeviceFlow_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(PollDeviceFlowRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -248,7 +249,7 @@ func _AuthService_PollDeviceFlow_Handler(srv interface{}, ctx context.Context, d
 		Server:     srv,
 		FullMethod: AuthService_PollDeviceFlow_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).PollDeviceFlow(ctx, req.(*PollDeviceFlowRequest))
 	}
 	return interceptor(ctx, in, info, handler)

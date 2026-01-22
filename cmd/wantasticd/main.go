@@ -63,7 +63,7 @@ func handleLogin() {
 	if err := cfg.SaveToFile(configPath); err != nil {
 		log.Printf("Warning: could not save configuration file: %v", err)
 		log.Println("Running with in-memory configuration only.")
-		runAgentWithConfig(cfg, false)
+		runAgentWithConfig(cfg)
 	} else {
 		log.Println("Login successful. Configuration saved to", configPath)
 		log.Println("Connecting...")
@@ -71,16 +71,12 @@ func handleLogin() {
 	}
 }
 
-func runAgentWithConfig(cfg *config.Config, exitNode bool) {
+func runAgentWithConfig(cfg *config.Config) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	if exitNode {
-		cfg.ExitNode.Enabled = true
-	}
 
 	agt, err := agent.New(cfg)
 	if err != nil {
@@ -110,7 +106,7 @@ func runAgentWithConfig(cfg *config.Config, exitNode bool) {
 func handleConnect() {
 	connectCmd := flag.NewFlagSet("connect", flag.ExitOnError)
 	configPath := connectCmd.String("config", "", "Path to configuration file")
-	exitNode := connectCmd.Bool("exit-node", false, "Enable exit node functionality")
+	verbose := connectCmd.Bool("v", false, "Enable verbose logging and debug output")
 	connectCmd.Parse(os.Args[2:])
 
 	if *configPath == "" {
@@ -119,10 +115,10 @@ func handleConnect() {
 		os.Exit(1)
 	}
 
-	runAgent(*configPath, *exitNode)
+	runAgent(*configPath, *verbose)
 }
 
-func runAgent(configPath string, exitNode bool) {
+func runAgent(configPath string, verbose bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -134,8 +130,8 @@ func runAgent(configPath string, exitNode bool) {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	if exitNode {
-		cfg.ExitNode.Enabled = true
+	if verbose {
+		cfg.Verbose = true
 	}
 
 	agt, err := agent.New(cfg)

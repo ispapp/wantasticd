@@ -1,9 +1,13 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +16,131 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// demoConfig holds the configuration loaded from demo.conf
+type demoConfig struct {
+	DeviceAddresses  []string
+	DeviceListenPort int
+	DeviceMTU        int
+	DeviceDNS        []string
+
+	ServerEndpoint            string
+	ServerPort                int
+	ServerPublicKey           string
+	ServerAllowedIPs          []string
+	ServerPersistentKeepalive int
+
+	NetworkRoutes          []string
+	NetworkForwardingRules []string
+	NetworkFirewallRules   []string
+}
+
+// loadDemoConfig loads and parses the demo.conf file from the root directory
+func loadDemoConfig() (*demoConfig, error) {
+	config := &demoConfig{
+		// Default values if demo.conf doesn't exist or values are missing
+		DeviceAddresses:  []string{"10.8.0.2/24", "fd42:42:42::2/64"},
+		DeviceListenPort: 51820,
+		DeviceMTU:        1420,
+		DeviceDNS:        []string{"1.1.1.1", "8.8.8.8"},
+
+		ServerEndpoint:            "demo.wantastic.com",
+		ServerPort:                51820,
+		ServerPublicKey:           "demo-server-public-key",
+		ServerAllowedIPs:          []string{"0.0.0.0/0", "::/0"},
+		ServerPersistentKeepalive: 25,
+
+		NetworkRoutes:          []string{"10.0.0.0/8", "192.168.0.0/16"},
+		NetworkForwardingRules: []string{},
+		NetworkFirewallRules:   []string{},
+	}
+
+	// Try to load demo.conf from the root directory
+	file, err := os.Open("demo.conf")
+	if err != nil {
+		log.Printf("Warning: demo.conf not found, using default configuration")
+		return config, nil
+	}
+	defer file.Close()
+
+	currentSection := ""
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip comments and empty lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Check for section headers
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.Trim(line, "[]")
+			continue
+		}
+
+		// Parse key-value pairs
+		if idx := strings.Index(line, "="); idx > 0 {
+			key := strings.TrimSpace(line[:idx])
+			value := strings.TrimSpace(line[idx+1:])
+
+			switch currentSection {
+			case "Device":
+				switch key {
+				case "Addresses":
+					config.DeviceAddresses = strings.Split(value, ", ")
+				case "ListenPort":
+					if port, err := strconv.Atoi(value); err == nil {
+						config.DeviceListenPort = port
+					}
+				case "MTU":
+					if mtu, err := strconv.Atoi(value); err == nil {
+						config.DeviceMTU = mtu
+					}
+				case "DNS":
+					config.DeviceDNS = strings.Split(value, ", ")
+				}
+
+			case "Server":
+				switch key {
+				case "Endpoint":
+					config.ServerEndpoint = value
+				case "Port":
+					if port, err := strconv.Atoi(value); err == nil {
+						config.ServerPort = port
+					}
+				case "PublicKey":
+					config.ServerPublicKey = value
+				case "AllowedIPs":
+					config.ServerAllowedIPs = strings.Split(value, ", ")
+				case "PersistentKeepalive":
+					if keepalive, err := strconv.Atoi(value); err == nil {
+						config.ServerPersistentKeepalive = keepalive
+					}
+				}
+
+			case "Network":
+				switch key {
+				case "Routes":
+					config.NetworkRoutes = strings.Split(value, ", ")
+				case "ForwardingRules":
+					config.NetworkForwardingRules = strings.Split(value, ", ")
+				case "FirewallRules":
+					config.NetworkFirewallRules = strings.Split(value, ", ")
+				}
+
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read demo.conf: %w", err)
+	}
+
+	log.Printf("Loaded configuration from demo.conf")
+	return config, nil
+}
 
 // DemoServer implements the AuthService for testing and demo purposes
 type DemoServer struct {

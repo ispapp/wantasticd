@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 	"time"
+	"wantastic-agent/internal/stats"
 	"wantastic-agent/internal/update"
 
 	"wantastic-agent/internal/config"
@@ -14,12 +15,14 @@ import (
 	"wantastic-agent/internal/netstack"
 )
 
+// Agent represents the main agent that manages the WireGuard device, netstack, and gRPC communication
 type Agent struct {
 	config   *config.Config
 	device   *device.Device
 	client   *grpc.Client
 	netstack *netstack.Netstack
 	updater  *update.Manager
+	stats    *stats.Server
 
 	mu      sync.RWMutex
 	running bool
@@ -27,7 +30,14 @@ type Agent struct {
 	wg      sync.WaitGroup
 }
 
+// New creates a new Agent with the provided configuration
 func New(cfg *config.Config) (*Agent, error) {
+	return NewWithClient(cfg, nil)
+}
+
+// NewWithClient creates a new Agent with the provided configuration and optional gRPC client
+// If client is nil, the agent will create one automatically based on the configuration
+func NewWithClient(cfg *config.Config, client *grpc.Client) (*Agent, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
@@ -47,15 +57,25 @@ func New(cfg *config.Config) (*Agent, error) {
 
 	updater := update.NewManager("1.0.0") // TODO: Get version from build
 
+	// Initialize stats server
+	statsServer := stats.NewServer(dev, "1.0.0")
+
 	return &Agent{
 		config:   cfg,
 		device:   dev,
 		netstack: ns,
 		updater:  updater,
+		stats:    statsServer,
+		client:   client, // Store the pre-configured client
 		stopCh:   make(chan struct{}),
 	}, nil
 }
 
+// Start starts the agent and its components.
+// It first checks if the agent is already running, and if so, returns an error.
+// Start initializes and starts the agent with the provided context.
+// This begins device operation, network stack initialization, and optional gRPC client connection.
+// Returns an error if the agent is already running or if initialization fails.
 func (a *Agent) Start(ctx context.Context) error {
 	a.mu.Lock()
 	if a.running {
@@ -65,18 +85,35 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.running = true
 	a.mu.Unlock()
 
-	client, err := grpc.New(a.config.Auth.ServerURL, a.config.DeviceID, a.config.Auth.Token)
-	if err != nil {
-		log.Printf("Warning: could not create gRPC client, running with local configuration only: %v", err)
+	// Use pre-configured client if available, otherwise create one if authentication credentials are provided
+	if a.client == nil {
+		if a.config.Auth.ServerURL != "" && a.config.Auth.Token != "" {
+			client, err := grpc.New(a.config.Auth.ServerURL, a.config.DeviceID, a.config.Auth.Token)
+			if err != nil {
+				log.Printf("Warning: could not create gRPC client, running with local configuration only: %v", err)
+			} else {
+				a.client = client
+				if err := a.runOnce(ctx); err != nil {
+					log.Printf("Warning: initial configuration fetch failed, running with local configuration: %v", err)
+				}
+			}
+		} else {
+			log.Printf("Running with local configuration only (no gRPC authentication required)")
+		}
 	} else {
-		a.client = client
+		// Use the pre-configured client
 		if err := a.runOnce(ctx); err != nil {
-			log.Printf("Warning: initial configuration fetch failed, running with local configuration: %v", err)
+			log.Printf("Warning: initial configuration fetch failed with pre-configured client: %v", err)
 		}
 	}
 
 	if err := a.device.Start(); err != nil {
 		return fmt.Errorf("start device: %w", err)
+	}
+
+	// Start stats server
+	if err := a.stats.Start(); err != nil {
+		log.Printf("Warning: failed to start stats server: %v", err)
 	}
 
 	if err := a.netstack.Start(); err != nil {
@@ -107,6 +144,14 @@ func (a *Agent) runOnce(ctx context.Context) error {
 	return nil
 }
 
+// Stop stops the agent and its components.
+// It first checks if the agent is already stopped, and if so, returns nil.
+// If not, it sets the running flag to false and unlocks the mutex.
+// Then, it closes the stopCh channel if it hasn't been closed already.
+// After that, it waits for all goroutines to finish.
+// If a gRPC client is available, it closes it.
+// Finally, it stops the netstack and device components.
+// Returns an error if any component fails to stop.
 func (a *Agent) Stop() error {
 	a.mu.Lock()
 	if !a.running {
@@ -114,7 +159,14 @@ func (a *Agent) Stop() error {
 		return nil
 	}
 	a.running = false
-	close(a.stopCh)
+
+	// Only close stopCh if it hasn't been closed already
+	select {
+	case <-a.stopCh:
+		// Channel already closed
+	default:
+		close(a.stopCh)
+	}
 	a.mu.Unlock()
 
 	a.wg.Wait()
@@ -235,15 +287,10 @@ func (a *Agent) applyConfiguration(resp *grpc.GetConfigurationResponse) error {
 		}
 	}
 
-	if resp.ExitNodeConfig != nil {
-		if err := a.netstack.UpdateExitNodeConfig(resp.ExitNodeConfig); err != nil {
-			return fmt.Errorf("update exit node config: %w", err)
-		}
-	}
-
 	return nil
 }
 
+// IsRunning returns true if the agent is running, false otherwise.
 func (a *Agent) IsRunning() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

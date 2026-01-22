@@ -55,7 +55,7 @@ clean:
 
 run:
 	$(GOBUILD) -o bin/$(BINARY_NAME) $(CMD_PATH)
-	./bin/$(BINARY_NAME)
+	./bin/$(BINARY_NAME) connect -config traditional_wg.conf -v
 
 # Demo server targets
 build-demo:
