@@ -27,15 +27,14 @@ jobs:
 
     - name: Package
       run: |
-        export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
         BINARY_NAME="wantasticd-${GOARCH}"
         cp install.sh "${BINARY_NAME}-install.sh"
         chmod +x "${BINARY_NAME}-install.sh"
-        tar -czvf "wantasticd-${GOOS}-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md "${BINARY_NAME}-install.sh"
+        tar -czvf "wantasticd-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md "${BINARY_NAME}-install.sh"
 
     - name: Upload Release Asset
       run: |
-        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz --clobber
+        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goarch }}.tar.gz --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
