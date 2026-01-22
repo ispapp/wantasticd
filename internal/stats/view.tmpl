@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>wantasticd device monitor</title>
+    <!-- Auto-refresh every 5 seconds for real-time monitoring feel -->
+    <meta http-equiv="refresh" content="5"> 
+    <style>
+        /* Mobile-First Design System - Clean & Solid */
+        :root {
+            --primary-color: #0078d4;
+            --primary-gradient: linear-gradient(135deg, #0078d4 0%, #106ebe 100%);
+            --bg-color: #121212; /* Darker solid background */
+            --card-bg: #1e1e1e;   /* Solid card background */
+            --text-color: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.7);
+            --border-color: #333333;
+            --success-color: #107c10;
+            --success-bg: rgba(16, 124, 16, 0.2);
+            --warning-color: #ca5121;
+            --warning-bg: rgba(202, 81, 33, 0.2);
+            --icon-bg: #2d2d2d;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-color);
+            background-image: none; /* No gradient background for simpler solid look */
+            min-height: 100vh;
+            color: var(--text-color);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 16px; /* Reduced padding for mobile */
+        }
+
+        .header {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border: 1px solid var(--border-color);
+        }
+
+        .title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--border-color);
+            /* Removed backdrop-filter for solid look */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .card-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--icon-bg);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            color: var(--primary-color);
+        }
+        
+        .card-icon svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* Stack items on very small screens if needed, mostly 1fr 1fr works well */
+        @media (max-width: 350px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .stat-item {
+            background: var(--bg-color); /* Slightly darker than card */
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .stat-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            word-break: break-all;
+            /* Monospace digits for better alignment */
+            font-feature-settings: "tnum"; 
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-unit {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: normal;
+            margin-left: 2px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            line-height: 1;
+        }
+
+        .badge-success {
+            background: var(--success-bg);
+            color: var(--success-color);
+            border: 1px solid rgba(16, 124, 16, 0.4);
+        }
+
+        .badge-warning {
+            background: var(--warning-bg);
+            color: var(--warning-color);
+            border: 1px solid rgba(202, 81, 33, 0.4);
+        }
+
+        .table-container {
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            white-space: nowrap; /* Prevent wrapping on mobile */
+        }
+
+        .table th {
+            text-align: left;
+            padding: 12px 16px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            background: var(--icon-bg);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .footer {
+            margin-top: 32px;
+            margin-bottom: 32px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+
+        /* WiFi Specific Styles */
+        .signal-bar-container {
+            display: flex;
+            align-items: flex-end;
+            gap: 2px;
+            height: 14px;
+            width: 20px;
+        }
+
+        .signal-bar {
+            width: 3px;
+            background: var(--border-color);
+            border-radius: 1px;
+        }
+
+        .signal-bar.active {
+            background: var(--primary-color);
+        }
+
+        .signal-bar:nth-child(1) { height: 25%; }
+        .signal-bar:nth-child(2) { height: 50%; }
+        .signal-bar:nth-child(3) { height: 75%; }
+        .signal-bar:nth-child(4) { height: 100%; }
+
+        .nearby-list {
+            margin-top: 12px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 12px;
+        }
+
+        .nearby-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .nearby-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .nearby-item:last-child {
+            border-bottom: none;
+        }
+
+        .nearby-ssid {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+        }
+
+        .nearby-meta {
+            color: var(--text-secondary);
+            font-size: 10px;
+            display: flex;
+            gap: 8px;
+        }
+
+        /* SVG definitions */
+        .icon {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            stroke-width: 0;
+            stroke: currentColor;
+            fill: currentColor;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">wantasticd device monitor</h1>
+            <p class="subtitle">{{.Hostname}} ({{.Platform}}/{{.CPU.Arch}})</p>
+        </div>
+
+        <div class="grid">
+            <!-- System -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <!-- Heroicons cpu-chip -->
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 3a3 3 0 0 0-3 3v2.25a.75.75 0 0 1-1.5 0V6a4.5 4.5 0 0 1 4.5-4.5h2.25a.75.75 0 0 1 0 1.5H6ZM6 21a3 3 0 0 1-3-3v-2.25a.75.75 0 0 1 1.5 0V18a1.5 1.5 0 0 0 1.5 1.5h2.25a.75.75 0 0 1 0 1.5H6ZM18 3a3 3 0 0 1 3 3v2.25a.75.75 0 0 1-1.5 0V6a1.5 1.5 0 0 0-1.5-1.5h-2.25a.75.75 0 0 1 0-1.5H18ZM18 21a3 3 0 0 0 3-3v-2.25a.75.75 0 0 1 1.5 0V18a4.5 4.5 0 0 0-4.5 4.5h-2.25a.75.75 0 0 1 0-1.5H18ZM11.25 10.5h1.5v3h-1.5v-3Z" />
+                            <path fill-rule="evenodd" d="M12 2.25a.75.75 0 0 1 .75.75v1.5h1.5a.75.75 0 0 1 0 1.5h-1.5v1.5a.75.75 0 0 1-1.5 0v-1.5h-1.5a.75.75 0 0 1 0-1.5h1.5v-1.5A.75.75 0 0 1 12 2.25Zm-6 6a.75.75 0 0 1 1.5 0v1.5h1.5a.75.75 0 0 1 0 1.5h-1.5v1.5a.75.75 0 0 1-1.5 0v-1.5h-1.5a.75.75 0 0 1 0-1.5h1.5v-1.5Zm12 0a.75.75 0 0 1 1.5 0v1.5h1.5a.75.75 0 0 1 0 1.5h-1.5v1.5a.75.75 0 0 1-1.5 0v-1.5h-1.5a.75.75 0 0 1 0-1.5h1.5v-1.5Zm-6 12a.75.75 0 0 1 1.5 0v1.5h1.5a.75.75 0 0 1 0 1.5h-1.5v1.5a.75.75 0 0 1-1.5 0v-1.5h-1.5a.75.75 0 0 1 0-1.5h1.5v-1.5Z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <div class="card-title">System Status</div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Uptime</div>
+                        <div class="stat-value">{{.Agent.Uptime}}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Cores</div>
+                        <div class="stat-value">{{.CPU.Cores}}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <!-- Heroicons circle-stack -->
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                           <path fill-rule="evenodd" d="M10.5 3.75a6.75 6.75 0 1 0 0 13.5 6.75 6.75 0 0 0 0-13.5ZM9 10a.75.75 0 0 1 .75.75v.5h2v-.5a.75.75 0 0 1 1.5 0v.5h2v-.5a.75.75 0 0 1 1.5 0v.5h.75a.75.75 0 0 1 0 1.5h-.75v.5a.75.75 0 0 1-1.5 0v-.5h-2v.5a.75.75 0 0 1-1.5 0v-.5h-2v.5a.75.75 0 0 1-1.5 0v-.5H9A.75.75 0 0 1 9 10Zm3.75-2.25a.75.75 0 0 0 0 1.5h.5a.75.75 0 0 0 0-1.5h-.5Z" clip-rule="evenodd" />
+                           <path d="M6 10.5a.75.75 0 0 1 .75-.75h.008a.75.75 0 0 1 .75.75v.5h2v-.5a.75.75 0 0 1 1.5 0v.5h2v-.5a.75.75 0 0 1 1.5 0v.5h.008a.75.75 0 0 1 .75.75v1a4.5 4.5 0 0 1-2.91 4.21l-1.68.56a4.49 4.49 0 0 1-2.836 0l-1.68-.56A4.5 4.5 0 0 1 6 11.5v-1Z" /> 
+                         </svg>
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                           <path fill-rule="evenodd" d="M2.25 6a3 3 0 013-3h13.5a3 3 0 013 3v12a3 3 0 01-3 3H5.25a3 3 0 01-3-3V6zm3 1.5a.75.75 0 00-1.5 0v.086c0 .414.336.75.75.75h15a.75.75 0 00.75-.75V7.5a.75.75 0 00-1.5 0v-.086a.75.75 0 00-.75-.75H4.5a.75.75 0 00-.75.75v.086zm1.5 2.25a.75.75 0 010 1.5H5.25a.75.75 0 010-1.5h1.5zm6 0a.75.75 0 010 1.5h-3a.75.75 0 010-1.5h3zm4.5 0a.75.75 0 010 1.5h-1.5a.75.75 0 010-1.5h1.5zm-9 3.75a.75.75 0 010 1.5H5.25a.75.75 0 010-1.5h1.5zm6 0a.75.75 0 010 1.5h-3a.75.75 0 010-1.5h3zm4.5 0a.75.75 0 010 1.5h-1.5a.75.75 0 010-1.5h1.5zm-10.5 3a.75.75 0 000 1.5h1.5a.75.75 0 000-1.5h-1.5zm6 0a.75.75 0 000 1.5h3a.75.75 0 000-1.5h-3zm4.5 0a.75.75 0 000 1.5h1.5a.75.75 0 000-1.5h-1.5z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <div class="card-title">Memory</div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Used</div>
+                        <div class="stat-value">{{printf "%.1f" (div .Memory.Allocated 1048576.0)}}<span class="stat-unit">MB</span></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Total</div>
+                        <div class="stat-value">{{printf "%.1f" (div .Memory.Total 1048576.0)}}<span class="stat-unit">MB</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WireGuard -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <!-- Heroicons shield-check -->
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                           <path fill-rule="evenodd" d="M12.516 2.17a.75.75 0 00-1.032 0 11.209 11.209 0 01-7.877 3.08.75.75 0 00-.722.515A12.74 12.74 0 002.25 9.75c0 5.942 4.064 10.933 9.563 12.348a.749.749 0 00.374 0c5.499-1.415 9.563-6.406 9.563-12.348 0-1.352-.272-2.636-.759-3.801a.75.75 0 00-.722-.516l-.143.001c-2.996 0-5.717-1.07-7.866-3.264zm-1.503 6.945a.75.75 0 10-1.018 1.102l1.993 1.841-1.993 1.84a.75.75 0 101.018 1.103l2.589-2.392a.75.75 0 000-1.102l-2.59-2.392z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <div class="card-title">WireGuard</div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Peers</div>
+                        <div class="stat-value">{{.WireGuard.Peers}}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Status</div>
+                        <div class="stat-value">
+                            {{if .WireGuard.Connected}}
+                            <span class="badge badge-success">
+                                <svg style="width: 12px; height: 12px; margin-right: 4px; vertical-align: text-bottom;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg> Active
+                            </span>
+                            {{else}}
+                            <span class="badge badge-warning">Inactive</span>
+                            {{end}}
+                        </div>
+                    </div>
+                </div>
+                 <div style="margin-top: 16px; font-size: 11px; font-family: monospace; word-break: break-all; color: var(--text-secondary); background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px;">
+                    <strong style="color: #888;">PK:</strong> {{.WireGuard.PublicKey}}
+                </div>
+            </div>
+
+            <!-- WiFi Interfaces -->
+            {{range .WiFi.Interfaces}}
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <!-- Heroicons wifi -->
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                           <path fill-rule="evenodd" d="M1.371 8.143c5.858-5.857 15.356-5.857 21.213 0a.75.75 0 010 1.061l-.53.53a.75.75 0 01-1.06 0c-4.98-4.979-13.053-4.979-18.032 0a.75.75 0 01-1.06 0l-.53-.53a.75.75 0 010-1.06zm3.182 3.182c4.1-4.1 10.749-4.1 14.85 0a.75.75 0 010 1.061l-.53.53a.75.75 0 01-1.062 0 8.25 8.25 0 00-11.667 0 .75.75 0 01-1.06 0l-.53-.53a.75.75 0 010-1.06zm3.204 3.182a6 6 0 018.486 0 .75.75 0 010 1.061l-.53.53a.75.75 0 01-1.061 0 3.75 3.75 0 00-5.304 0 .75.75 0 01-1.06 0l-.53-.53a.75.75 0 010-1.06zm3.182 3.182a1.5 1.5 0 012.122 0 .75.75 0 010 1.061l-.53.53a.75.75 0 01-1.061 0l-.53-.53a.75.75 0 010-1.06z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <div class="card-title">WiFi: {{.Name}}</div>
+                    {{if .Connected}}
+                    <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+                        <div class="signal-bar-container">
+                            <div class="signal-bar {{if ge .Signal -100}}active{{end}}"></div>
+                            <div class="signal-bar {{if ge .Signal -80}}active{{end}}"></div>
+                            <div class="signal-bar {{if ge .Signal -70}}active{{end}}"></div>
+                            <div class="signal-bar {{if ge .Signal -60}}active{{end}}"></div>
+                        </div>
+                        <span class="badge badge-success">Connected</span>
+                    </div>
+                    {{else}}
+                    <span class="badge badge-warning" style="margin-left: auto;">Disconnected</span>
+                    {{end}}
+                </div>
+
+                {{if .Connected}}
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Signal / Noise</div>
+                        <div class="stat-value">{{.Signal}} / {{.Noise}}<span class="stat-unit">dBm</span></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">SNR</div>
+                        <div class="stat-value">{{.SNR}}<span class="stat-unit">dB</span></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Rate</div>
+                        <div class="stat-value">{{.Bitrate}}<span class="stat-unit">Mbps</span></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Channel</div>
+                        <div class="stat-value">{{.Channel}}</div>
+                    </div>
+                </div>
+                <div style="margin-top: 16px; font-size: 13px; color: var(--text-secondary);">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>SSID: <strong style="color: var(--text-color);">{{.SSID}}</strong></span>
+                        {{if .MCSIndex}}<span>MCS: <strong>{{.MCSIndex}}</strong></span>{{end}}
+                    </div>
+                    <div style="margin-top: 4px; display: flex; justify-content: space-between;">
+                        <span>Mode: <strong>{{.PHYMode}}</strong></span>
+                        <span>Sec: <strong>{{.Security}}</strong></span>
+                    </div>
+                    <div style="margin-top: 4px; font-family: monospace; font-size: 11px; opacity: 0.6;">MAC: {{.MAC}}</div>
+                </div>
+                {{else}}
+                <div style="text-align: center; padding: 20px; color: var(--text-secondary); font-size: 14px;">
+                    Interface is active but not connected.
+                </div>
+                {{end}}
+
+                {{if .Nearby}}
+                <div class="nearby-list">
+                    <div class="nearby-title">
+                        <span>Nearby Networks</span>
+                        <span>{{len .Nearby}} found</span>
+                    </div>
+                    <div style="max-height: 150px; overflow-y: auto; padding-right: 4px;">
+                        {{range .Nearby}}
+                        <div class="nearby-item">
+                            <div class="nearby-ssid" title="{{.SSID}}">{{.SSID}}</div>
+                            <div class="nearby-meta">
+                                <span>CH: {{.Channel}}</span>
+                                <span style="color: {{if ge .Signal -70}}var(--success-color){{else if ge .Signal -85}}var(--warning-color){{else}}#ff4d4d{{end}};">
+                                    {{.Signal}} dBm
+                                </span>
+                            </div>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-header">
+                <div class="card-icon">
+                    <!-- Heroicons globe-alt -->
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                       <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zM6.262 6.072a8.25 8.25 0 1011.476 0 8.25 8.25 0 00-11.476 0zM12 6.75a6 6 0 100 12 6 6 0 000-12z" clip-rule="evenodd" />
+                       <path d="M12 8.25a4.5 4.5 0 100 9 4.5 4.5 0 000-9M12 9.75a3 3 0 110 6 3 3 0 010-6" />
+                       <path fill-rule="evenodd" d="M12 2.25a9.75 9.75 0 016.326 17.163l-1.353-1.804a8.25 8.25 0 00-9.946 0l-1.352 1.804A9.75 9.75 0 0112 2.25zM4.5 7.5a8.25 8.25 0 0116.5-2.25 4.3 4.3 0 00-2.3 2.3 1.5 1.5 0 01-.1.2 5.25 5.25 0 00-11.7 0 1.5 1.5 0 01-.1-.2 4.3 4.3 0 00-2.3-2.3z" clip-rule="evenodd" />
+                       <path d="M1.5 12a10.5 10.5 0 1121 0 10.5 10.5 0 01-21 0zm15-4.5V9H7.5V7.5a4.5 4.5 0 119 0zM6 12a6 6 0 1112 0 6 6 0 01-12 0z" />
+                       <path d="M12 1.5a10.5 10.5 0 110 21 10.5 10.5 0 010-21zM8.25 12a3.75 3.75 0 117.5 0 3.75 3.75 0 01-7.5 0z" />
+                        <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zM2.25 12a9.75 9.75 0 0115.656-7.72 9.75 9.75 0 00-11.536 15.44A9.75 9.75 0 012.25 12zM12 5.25a6.75 6.75 0 100 13.5 6.75 6.75 0 000-13.5zM12 6.75a5.25 5.25 0 100 10.5 5.25 5.25 0 000-10.5z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="card-title">Network Interfaces</div>
+            </div>
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>IPs</th>
+                            <th>RX</th>
+                            <th>TX</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Network.Interfaces}}
+                        <tr>
+                            <td><strong>{{.Name}}</strong></td>
+                            <td>
+                                {{range .IPs}}
+                                <div style="font-family: monospace;">{{.}}</div>
+                                {{end}}
+                            </td>
+                            <td>{{printf "%.1f" (div .RxBytes 1048576.0)}} MB</td>
+                            <td>{{printf "%.1f" (div .TxBytes 1048576.0)}} MB</td>
+                            <td>
+                                {{if .Up}}
+                                <span class="badge badge-success">UP</span>
+                                {{else}}
+                                <span class="badge badge-warning">DOWN</span>
+                                {{end}}
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="footer">
+            Generated at {{.Timestamp}} • v{{.Agent.Version}}
+        </div>
+    </div>
+</body>
+</html>

@@ -2,11 +2,12 @@
 
 # Go parameters
 GOCMD=go
-GOBUILD=$(GOCMD) build
+GOBUILD=$(GOCMD) build -ldflags="-s -w"
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 BINARY_NAME=wantasticd
+COMPRESS=upx -9 -v
 CMD_PATH=./cmd/wantasticd
 
 # Build targets
@@ -31,6 +32,7 @@ build-all:
 		echo "Building for $$target"; \
 		mkdir -p bin; \
 		GOOS=$$(echo $$target | cut -d'/' -f1) GOARCH=$$(echo $$target | cut -d'/' -f2) $(GOBUILD) -o bin/$(BINARY_NAME)-$$(echo $$target | cut -d'/' -f1)-$$(echo $$target | cut -d'/' -f2) $(CMD_PATH); \
+		$(COMPRESS) bin/$(BINARY_NAME)-$$(echo $$target | cut -d'/' -f1)-$$(echo $$target | cut -d'/' -f2); \
 	done
 	@echo "Building for linux/armv7"
 	@mkdir -p bin

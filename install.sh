@@ -7,7 +7,7 @@ set -e
 
 VERSION="${VERSION:-latest}"
 REPO="wantastic/wantasticd"
-BINARY_NAME="wantastic-wgclient"
+BINARY_NAME="wantasticd"
 INSTALL_DIR="/usr/local/bin"
 
 # Colors for output
@@ -34,10 +34,19 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Detect architecture
+# Detect architecture and OpenWRT
 detect_arch() {
     local arch="$(uname -m)"
     local os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    
+    # Check if this is OpenWRT
+    if [ -f "/etc/openwrt_release" ] || [ -f "/etc/openwrt_version" ] || [ -x "/usr/bin/opkg" ]; then
+        IS_OPENWRT=true
+        log_info "Detected OpenWRT system"
+        INSTALL_DIR="/usr/sbin"  # OpenWRT uses /usr/sbin for system binaries
+    else
+        IS_OPENWRT=false
+    fi
     
     case "$arch" in
         x86_64|amd64)
@@ -51,6 +60,12 @@ detect_arch() {
             ;;
         aarch64|armv8*|arm64)
             ARCH="arm64"
+            ;;
+        mips|mipsel)
+            ARCH="mips"
+            ;;
+        mips64|mips64el)
+            ARCH="mips64"
             ;;
         *)
             log_error "Unsupported architecture: $arch"
@@ -69,6 +84,9 @@ detect_arch() {
     esac
     
     log_info "Detected architecture: $OS-$ARCH"
+    if [ "$IS_OPENWRT" = "true" ]; then
+        log_info "OpenWRT system detected - using /usr/sbin for installation"
+    fi
 }
 
 # Download and install
@@ -134,6 +152,12 @@ create_systemd_service() {
         return 0
     fi
     
+    # OpenWRT uses init.d scripts, not systemd
+    if [ "$IS_OPENWRT" = "true" ]; then
+        create_openwrt_init_script
+        return 0
+    fi
+    
     if ! command -v systemctl >/dev/null 2>&1; then
         log_warning "systemctl not found - skipping service creation"
         return 0
@@ -184,6 +208,93 @@ EOF
         mv "$TEMP_DIR/wantasticd.service" "$service_file"
         systemctl daemon-reload
         log_success "Systemd service created. Enable with: systemctl enable wantasticd"
+    fi
+}
+
+# Create OpenWRT init.d script
+create_openwrt_init_script() {
+    local init_script="/etc/init.d/wantasticd"
+    
+    if [ -f "$init_script" ]; then
+        log_info "OpenWRT init script already exists: $init_script"
+        return 0
+    fi
+    
+    log_info "Creating OpenWRT init script..."
+    
+    cat > "$TEMP_DIR/wantasticd" << 'EOF'
+#!/bin/sh /etc/rc.common
+# OpenWRT init script for Wantastic IoT VPN Client
+
+START=99
+STOP=10
+
+start() {
+    # Start the VPN client in background
+    /usr/sbin/wantasticd connect -config /etc/wantasticd/config.json &
+    echo $! > /var/run/wantasticd.pid
+}
+
+stop() {
+    # Stop the VPN client
+    if [ -f /var/run/wantasticd.pid ]; then
+        kill -TERM $(cat /var/run/wantasticd.pid) 2>/dev/null
+        rm -f /var/run/wantasticd.pid
+    else
+        killall wantasticd 2>/dev/null
+    fi
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+boot() {
+    start
+}
+
+shutdown() {
+    stop
+}
+EOF
+    
+    # Make script executable
+    chmod +x "$TEMP_DIR/wantasticd"
+    
+    if [ ! -w "/etc/init.d" ]; then
+        sudo mv "$TEMP_DIR/wantasticd" "$init_script"
+        log_success "OpenWRT init script created: $init_script"
+        
+        # Try to enable the service automatically
+        if command -v "$init_script" >/dev/null 2>&1; then
+            if "$init_script" enable; then
+                log_success "OpenWRT service enabled for automatic startup"
+            else
+                log_info "Enable with: $init_script enable"
+            fi
+        else
+            log_info "Enable with: $init_script enable"
+        fi
+        
+        log_info "Start with: $init_script start"
+    else
+        mv "$TEMP_DIR/wantasticd" "$init_script"
+        log_success "OpenWRT init script created: $init_script"
+        
+        # Try to enable the service automatically
+        if command -v "$init_script" >/dev/null 2>&1; then
+            if "$init_script" enable; then
+                log_success "OpenWRT service enabled for automatic startup"
+            else
+                log_info "Enable with: $init_script enable"
+            fi
+        else
+            log_info "Enable with: $init_script enable"
+        fi
+        
+        log_info "Start with: $init_script start"
     fi
 }
 
@@ -262,8 +373,14 @@ main() {
         log_info ""
         log_info "Next steps:"
         log_info "1. Edit /etc/wantasticd/config.json with your configuration"
-        log_info "2. Start the service: systemctl start wantasticd"
-        log_info "3. Enable auto-start: systemctl enable wantasticd"
+        
+        if [ "$IS_OPENWRT" = "true" ]; then
+            log_info "2. Start the service: /etc/init.d/wantasticd start"
+            log_info "3. Service auto-start should already be enabled"
+        else
+            log_info "2. Start the service: systemctl start wantasticd"
+            log_info "3. Enable auto-start: systemctl enable wantasticd"
+        fi
     fi
     
     log_success "Installation completed successfully!"

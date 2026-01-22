@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/grpc"
 
+	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
@@ -23,6 +25,7 @@ type Device struct {
 	device   *device.Device
 	tunDev   tun.Device
 	netstack *netstack.Net
+	routing  *RoutingManager
 
 	mu        sync.RWMutex
 	running   bool
@@ -94,8 +97,21 @@ func (d *Device) Start() error {
 	}
 
 	if err := wireguardDevice.Up(); err != nil {
-		tunDev.Close()
-		return fmt.Errorf("bring device up: %w", err)
+		if strings.Contains(err.Error(), "bind: address already in use") {
+			log.Printf("Port %d is in use, trying a random port...", d.config.Interface.ListenPort)
+			d.config.Interface.ListenPort = 0
+			if err := d.configureDevice(wireguardDevice); err != nil {
+				tunDev.Close()
+				return fmt.Errorf("reconfigure device: %w", err)
+			}
+			if err := wireguardDevice.Up(); err != nil {
+				tunDev.Close()
+				return fmt.Errorf("bring device up (retry): %w", err)
+			}
+		} else {
+			tunDev.Close()
+			return fmt.Errorf("bring device up: %w", err)
+		}
 	}
 
 	if d.config.Verbose {
@@ -103,6 +119,16 @@ func (d *Device) Start() error {
 	}
 
 	d.device = wireguardDevice
+
+	// Setup routing to allow local subnet access
+	if d.config.Server.Endpoint != "" {
+		d.routing = NewRoutingManager(d.config.Server.Endpoint)
+		if err := d.routing.SetupRouting(); err != nil {
+			log.Printf("Warning: Failed to setup routing: %v", err)
+			// Continue despite routing errors - VPN will still work
+		}
+	}
+
 	return nil
 }
 
@@ -201,8 +227,26 @@ func (d *Device) configureDevice(dev *device.Device) error {
 
 		config += fmt.Sprintf("public_key=%s\n", publicKeyHex)
 		config += fmt.Sprintf("endpoint=%s:%d\n", d.config.Server.Endpoint, d.config.Server.Port)
-		config += "allowed_ip=0.0.0.0/0\n"
-		config += "allowed_ip=::/0\n"
+
+		// Configure AllowedIPs - route only specific networks through VPN
+		// and exclude local subnets to allow internal network access
+		if len(d.config.Server.AllowedIPs) > 0 {
+			// Use custom AllowedIPs from config
+			for _, allowedIP := range d.config.Server.AllowedIPs {
+				config += fmt.Sprintf("allowed_ip=%s\n", allowedIP)
+			}
+		} else {
+			// Default: route only non-private and specific networks through VPN
+			// This allows local subnet access while maintaining VPN connectivity
+			config += "allowed_ip=0.0.0.0/1\n"   // First half of internet
+			config += "allowed_ip=128.0.0.0/1\n" // Second half of internet
+			config += "allowed_ip=::/1\n"        // First half of IPv6 internet
+			config += "allowed_ip=8000::/1\n"    // Second half of IPv6 internet
+
+			// Exclude local networks (they will use direct routing)
+			// Note: These exclusions are handled by the routing table, not WireGuard config
+		}
+
 		config += "persistent_keepalive_interval=25\n"
 	}
 
@@ -316,6 +360,36 @@ func (d *Device) reconfigureDevice() error {
 
 	log.Println("Device reconfigured successfully")
 	return nil
+}
+
+// GetPublicKey returns the public key of the device.
+// If the public key is not set in the configuration, it derives it from the private key.
+func (d *Device) GetPublicKey() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	if d.config.PublicKey != "" {
+		return d.config.PublicKey
+	}
+
+	// Derive from private key
+	if d.config.PrivateKey != "" {
+		keyBytes, err := base64.StdEncoding.DecodeString(d.config.PrivateKey)
+		if err != nil || len(keyBytes) != 32 {
+			log.Printf("Error decoding private key for public key derivation: %v", err)
+			return "invalid-key"
+		}
+
+		var priv [32]byte
+		copy(priv[:], keyBytes)
+
+		var pub [32]byte
+		curve25519.ScalarBaseMult(&pub, &priv)
+
+		return base64.StdEncoding.EncodeToString(pub[:])
+	}
+
+	return "unknown"
 }
 
 // GetStats retrieves current device statistics and operational metrics.

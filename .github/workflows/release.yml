@@ -46,22 +46,7 @@ jobs:
         fi
 
     - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
+      run: |
+        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
-        asset_name: wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
-        asset_content_type: application/gzip
-
-    - name: Upload Release Asset (Windows)
-      if: matrix.goos == 'windows'
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.zip
-        asset_name: wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.zip
-        asset_content_type: application/zip
