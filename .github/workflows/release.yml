@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, darwin, windows, freebsd, openbsd]
-        goarch: [amd64, arm64, arm, '386']
+        goos: [linux]
+        goarch: [amd64, arm64, arm, 386]
         exclude:
           - goos: darwin
             goarch: '386'
@@ -28,18 +28,21 @@ jobs:
         export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
         export CGO_ENABLED=0
-        go build -v -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o wantastic-wgclient-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/wantastic-wgclient
+        go build -v -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o wantasticd-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/wantasticd
 
     - name: Package
       run: |
         export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
-        BINARY_NAME="wantastic-wgclient-${GOOS}-${GOARCH}"
+        BINARY_NAME="wantasticd-${GOOS}-${GOARCH}"
         if [ "$GOOS" = "windows" ]; then
-          mv "${BINARY_NAME}" wantastic-wgclient.exe
-          zip "wantastic-wgclient-${GOOS}-${GOARCH}.zip" wantastic-wgclient.exe README.md
+          mv "${BINARY_NAME}" wantasticd.exe
+          zip "wantasticd-${GOOS}-${GOARCH}.zip" wantasticd.exe README.md
         else
-          tar -czvf "wantastic-wgclient-${GOOS}-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md
+          # Include install script for non-Windows platforms (IoT focus)
+          cp install.sh "${BINARY_NAME}-install.sh"
+          chmod +x "${BINARY_NAME}-install.sh"
+          tar -czvf "wantasticd-${GOOS}-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md "${BINARY_NAME}-install.sh"
         fi
 
     - name: Upload Release Asset
@@ -48,8 +51,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./wantastic-wgclient-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
-        asset_name: wantastic-wgclient-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+        asset_path: ./wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+        asset_name: wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
         asset_content_type: application/gzip
 
     - name: Upload Release Asset (Windows)
@@ -59,6 +62,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./wantastic-wgclient-${{ matrix.goos }}-${{ matrix.goarch }}.zip
-        asset_name: wantastic-wgclient-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+        asset_path: ./wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+        asset_name: wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.zip
         asset_content_type: application/zip

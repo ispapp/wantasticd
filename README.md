@@ -1,13 +1,31 @@
-# wantastic-agent
-wantastic custom userspace wireguard client
+# wantasticd
+wantastic custom userspace wireguard client daemon
 
-Planned CLI commands:
-- fetch: Acquire WireGuard config over wss, validate, and write to /etc/wireguard/wg0.conf
-- up: Bring up a userspace WireGuard device (wireguard-go) with optional route install
-- down: Tear down the userspace WireGuard device
-- status: Show device and peer state
-- doctor: Check environment (capabilities, write perms, TUN availability)
-
-Build notes:
-- Pure Go (CGO_DISABLED=1) targeting broad GOOS/GOARCH matrix per go tool dist list.
-- Uses golang.zx2c4.com/wireguard for userspace device support.
+# Installation
+## Linux
+No prerequisites required.
+```
+wget https://github.com/wantastic/wantasticd/releases/download/${VERSION}/wantasticd-linux-${ARCH}
+chmod +x wantasticd-linux-${ARCH}
+sudo mv wantasticd-linux-${ARCH} /usr/local/bin/wantasticd
+```
+## connect
+To connect to a WireGuard server, use the `connect` command.
+```
+wantasticd connect -config /etc/wireguard/wg0.conf
+```
+## status
+To check the status of the WireGuard connection, use the `status` command.
+```
+wantasticd status
+```
+## login
+To login to the WireGuard server, use the `login` command.
+```
+wantasticd login -token ${TOKEN}
+```
+## login with browser
+To login to the WireGuard server with a browser, use the `login` command without any flags.
+```
+wantasticd login
+```

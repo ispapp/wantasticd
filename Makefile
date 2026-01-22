@@ -64,7 +64,10 @@ build-demo:
 run-demo:
 	$(GOBUILD) -o bin/$(DEMO_BINARY_NAME) $(DEMO_CMD_PATH)
 	./bin/$(DEMO_BINARY_NAME)
-
+release:
+# create tag with release action first arg and push it
+	git tag -a $(firstword $(filter-out release,$(MAKECMDGOALS))) -m "Release $(firstword $(filter-out release,$(MAKECMDGOALS)))"
+	git push origin $(firstword $(filter-out release,$(MAKECMDGOALS)))
 test:
 	$(GOTEST) -v ./...
 
