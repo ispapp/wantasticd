@@ -11,42 +11,29 @@ jobs:
     strategy:
       matrix:
         goos: [linux]
-        goarch: [amd64, arm64, arm, 386]
-        exclude:
-          - goos: darwin
-            goarch: '386'
-          - goos: darwin
-            goarch: arm
+        goarch: ["386", "amd64", "arm", "arm64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm"]
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.24.5'
 
     - name: Build
       run: |
-        export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
         export CGO_ENABLED=0
-        go build -v -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o wantasticd-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/wantasticd
+        go build -v -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o wantasticd-${{ matrix.goarch }} ./cmd/wantasticd
 
     - name: Package
       run: |
-        export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
-        BINARY_NAME="wantasticd-${GOOS}-${GOARCH}"
-        if [ "$GOOS" = "windows" ]; then
-          mv "${BINARY_NAME}" wantasticd.exe
-          zip "wantasticd-${GOOS}-${GOARCH}.zip" wantasticd.exe README.md
-        else
-          # Include install script for non-Windows platforms (IoT focus)
-          cp install.sh "${BINARY_NAME}-install.sh"
-          chmod +x "${BINARY_NAME}-install.sh"
-          tar -czvf "wantasticd-${GOOS}-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md "${BINARY_NAME}-install.sh"
-        fi
+        BINARY_NAME="wantasticd-${GOARCH}"
+        cp install.sh "${BINARY_NAME}-install.sh"
+        chmod +x "${BINARY_NAME}-install.sh"
+        tar -czvf "wantasticd-${GOOS}-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md "${BINARY_NAME}-install.sh"
 
     - name: Upload Release Asset
       run: |
-        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz --clobber
+        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goarch }}.tar.gz --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

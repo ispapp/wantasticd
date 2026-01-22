@@ -1,8 +1,6 @@
 module wantastic-agent
 
-go 1.24.0
-
-toolchain go1.24.5
+go 1.24.5
 
 require (
 	github.com/denisbrodbeck/machineid v1.0.1
