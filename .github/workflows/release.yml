@@ -53,12 +53,17 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Prepare R2 Upload
+      run: |
+        mkdir -p r2_upload
+        cp wantasticd-${{ matrix.goarch }}.tar.gz r2_upload/
+
     - name: Upload to R2
-      uses: ryand56/r2-upload-action@v1
+      uses: ryand56/r2-upload-action@latest
       with:
         r2-account-id: ${{ secrets.R2_ACCOUNT }}
         r2-access-key-id: ${{ secrets.R2_ACCESS_KEY }}
         r2-secret-access-key: ${{ secrets.R2_SECRET }}
-        bucket: ${{ secrets.R2_BUCKET }}
-        source: wantasticd-${{ matrix.goarch }}.tar.gz
-        destination: ${{ github.ref_name }}/wantasticd-${{ matrix.goarch }}.tar.gz
+        r2-bucket: ${{ secrets.R2_BUCKET }}
+        source-dir: r2_upload
+        destination-dir: ${{ github.ref_name }}
