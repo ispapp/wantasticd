@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,9 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed self-update.sh
+var updateScript embed.FS
 
 type Manager struct {
 	currentVersion string
@@ -31,109 +35,77 @@ func (m *Manager) GetCurrentVersion() string {
 	return m.currentVersion
 }
 
-func (m *Manager) CheckAndUpdate(ctx context.Context, updateURL, targetVersion string) error {
-	if !m.shouldUpdate(targetVersion) {
-		log.Printf("Already running latest version: %s", m.currentVersion)
-		return nil
-	}
-
-	log.Printf("Downloading update from %s", updateURL)
-	
-	binaryPath, err := m.downloadUpdate(ctx, updateURL)
+// FetchLatestVersion gets the latest version as text from the /latest endpoint
+func (m *Manager) FetchLatestVersion(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://wantasticd.wantastic.app/latest", nil)
 	if err != nil {
-		return fmt.Errorf("download update: %w", err)
-	}
-	defer os.Remove(binaryPath)
-
-	if err := m.verifyUpdate(binaryPath); err != nil {
-		return fmt.Errorf("verify update: %w", err)
+		return "", err
 	}
 
-	if err := m.applyUpdate(binaryPath); err != nil {
-		return fmt.Errorf("apply update: %w", err)
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch latest version: %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(body)), nil
+}
+
+// RunUpdateScript executes the embedded self-update.sh script
+func (m *Manager) RunUpdateScript(ctx context.Context, targetVersion string) error {
+	scriptContent, err := updateScript.ReadFile("self-update.sh")
+	if err != nil {
+		return fmt.Errorf("read embedded script: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp("", "self-update-*.sh")
+	if err != nil {
+		return fmt.Errorf("create temp script: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(scriptContent); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("write temp script: %w", err)
+	}
+	tmpFile.Close()
+
+	if err := os.Chmod(tmpFile.Name(), 0755); err != nil {
+		return fmt.Errorf("chmod temp script: %w", err)
+	}
+
+	log.Printf("Running update script for version %s...", targetVersion)
+	cmd := exec.CommandContext(ctx, "/bin/sh", tmpFile.Name(), targetVersion)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("execute update script: %w", err)
 	}
 
 	return nil
 }
 
 func (m *Manager) shouldUpdate(targetVersion string) bool {
-	// Simple version comparison - in production, use proper semantic versioning
 	return m.currentVersion != targetVersion
 }
 
-func (m *Manager) downloadUpdate(ctx context.Context, url string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+func (m *Manager) CheckAndUpdate(ctx context.Context, targetVersion string) error {
+	if !m.shouldUpdate(targetVersion) {
+		log.Printf("Already running latest version: %s", m.currentVersion)
+		return nil
 	}
 
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("download: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download failed: %s", resp.Status)
-	}
-
-	// Create temporary file
-	tmpFile, err := os.CreateTemp("", "wantastic-update-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	defer tmpFile.Close()
-
-	// Download to temporary file
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		return "", fmt.Errorf("copy: %w", err)
-	}
-
-	return tmpFile.Name(), nil
-}
-
-func (m *Manager) verifyUpdate(binaryPath string) error {
-	// Make executable
-	if err := os.Chmod(binaryPath, 0755); err != nil {
-		return fmt.Errorf("chmod: %w", err)
-	}
-
-	// Basic verification - check if it's a valid binary
-	cmd := exec.Command(binaryPath, "--version")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("verify binary: %w", err)
-	}
-
-	return nil
-}
-
-func (m *Manager) applyUpdate(binaryPath string) error {
-	// Get current executable path
-	currentPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
-	}
-
-	// Create backup
-	backupPath := currentPath + ".backup"
-	if err := os.Rename(currentPath, backupPath); err != nil {
-		return fmt.Errorf("backup current: %w", err)
-	}
-
-	// Move new binary to current location
-	if err := os.Rename(binaryPath, currentPath); err != nil {
-		// Restore backup on failure
-		os.Rename(backupPath, currentPath)
-		return fmt.Errorf("replace binary: %w", err)
-	}
-
-	// Remove backup after successful update
-	os.Remove(backupPath)
-
-	log.Println("Update applied successfully. Restarting...")
-	
-	// Restart the process
-	return m.restart()
+	return m.RunUpdateScript(ctx, targetVersion)
 }
 
 func (m *Manager) restart() error {
@@ -144,13 +116,13 @@ func (m *Manager) restart() error {
 	}
 
 	args := os.Args[1:]
-	
+
 	// Start new process
 	cmd := exec.Command(executable, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-	
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start new process: %w", err)
 	}
@@ -160,28 +132,13 @@ func (m *Manager) restart() error {
 	return nil
 }
 
-// GetPlatform returns the current platform identifier for update URLs
+// GetPlatform returns the current architecture for update URLs
 func GetPlatform() string {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
-	
-	// Normalize architecture names
-	switch goarch {
-	case "amd64":
-		goarch = "x86_64"
-	case "386":
-		goarch = "x86"
-	}
-	
-	return fmt.Sprintf("%s-%s", goos, goarch)
+	return runtime.GOARCH
 }
 
-// BuildUpdateURL constructs an update URL for the given version and platform
-func BuildUpdateURL(baseURL, version, platform string) string {
-	if strings.Contains(baseURL, "%s") {
-		return fmt.Sprintf(baseURL, version, platform)
-	}
-	
-	// Default URL pattern
-	return fmt.Sprintf("%s/wantastic-agent-%s-%s", baseURL, version, platform)
+// BuildUpdateURL constructs an update URL for the given version and architecture
+func BuildUpdateURL(baseURL, version, arch string) string {
+	// Pattern: https://wantasticd.wantastic.app/${version}/wantasticd-${arch}.tar.gz
+	return fmt.Sprintf("%s/%s/wantasticd-%s.tar.gz", baseURL, version, arch)
 }

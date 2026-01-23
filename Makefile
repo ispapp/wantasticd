@@ -13,9 +13,19 @@ CMD_PATH=./cmd/wantasticd
 # Build targets
 TARGETS := \
 	darwin/arm64 \
+	linux/386 \
 	linux/amd64 \
-	linux/arm64 \
 	linux/arm \
+	linux/arm64 \
+	linux/loong64 \
+	linux/mips \
+	linux/mips64 \
+	linux/mips64le \
+	linux/mipsle \
+	linux/ppc64 \
+	linux/ppc64le \
+	linux/riscv64 \
+	linux/s390x \
 	windows/amd64
 
 # Demo server parameters

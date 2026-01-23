@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"wantastic-agent/internal/device"
+	agent_netstack "wantastic-agent/internal/netstack"
 
 	"golang.org/x/sys/cpu"
 )
@@ -24,9 +25,11 @@ var viewsFS embed.FS
 // Server provides metrics and statistics about the device
 type Server struct {
 	device    *device.Device
+	netstack  *agent_netstack.Netstack
 	server    *http.Server
 	mu        sync.RWMutex
 	startTime time.Time
+	running   bool
 }
 
 // Metrics represents comprehensive device metrics
@@ -134,9 +137,10 @@ type TrafficStats struct {
 }
 
 // NewServer creates a new stats server instance
-func NewServer(device *device.Device, version string) *Server {
+func NewServer(device *device.Device, ns *agent_netstack.Netstack, version string) *Server {
 	s := &Server{
 		device:    device,
+		netstack:  ns,
 		startTime: time.Now(),
 	}
 
@@ -144,6 +148,7 @@ func NewServer(device *device.Device, version string) *Server {
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/view", s.handleView)
+	mux.HandleFunc("/peers", s.handlePeers)
 	mux.HandleFunc("/", s.handleRoot)
 
 	s.server = &http.Server{
@@ -156,11 +161,22 @@ func NewServer(device *device.Device, version string) *Server {
 
 // Start begins the stats server
 func (s *Server) Start() error {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return nil // Already running
+	}
+	s.running = true
+	s.mu.Unlock()
+
 	go func() {
-		log.Printf("Stats server starting on port 9034")
+		log.Printf("Stats server active on port 9034")
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Stats server error: %v", err)
 		}
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
 	}()
 	return nil
 }
@@ -181,6 +197,19 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
 		return
 	}
+}
+
+// handlePeers returns a list of discovered peers
+func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	peers := s.netstack.DiscoverPeers()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"peers": peers,
+		"count": len(peers),
+	})
 }
 
 // handleHealth returns a simple health check response
@@ -289,7 +318,10 @@ func (s *Server) collectMetrics() Metrics {
 	// WireGuard metrics (would use actual device stats)
 	m.WireGuard.Connected = true
 	m.WireGuard.PublicKey = s.device.GetPublicKey()
-	m.WireGuard.Peers = 1
+
+	// Try to get peers from netstack if available
+	m.WireGuard.Peers = len(s.netstack.DiscoverPeers())
+
 	m.WireGuard.Throughput.TxBytes = 1024 * 1024     // 1MB
 	m.WireGuard.Throughput.RxBytes = 2 * 1024 * 1024 // 2MB
 

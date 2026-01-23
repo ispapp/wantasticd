@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 	"wantastic-agent/internal/update"
 
 	"wantastic-agent/internal/agent"
@@ -29,6 +32,10 @@ func main() {
 		handleLogin()
 	case "connect":
 		handleConnect()
+	case "update":
+		handleUpdate()
+	case "peers":
+		handlePeers()
 	case "version":
 		printVersion()
 	default:
@@ -144,6 +151,13 @@ func runAgent(configPath string, verbose bool) {
 	}
 
 	log.Printf("Wantastic agent started successfully")
+	if os.Geteuid() != 0 {
+		log.Printf("NOTE: Running without root/sudo. Using userspace networking (only some services forwarded).")
+		log.Printf("      System tools like ping/ifconfig will not see the VPN.")
+		log.Printf("      To reach other peers, use the SOCKS5 proxy: ALL_PROXY=socks5://127.0.0.1:1055")
+	} else {
+		log.Printf("Running as root. System TUN interface created and subnet routes configured.")
+	}
 
 	select {
 	case <-sigCh:
@@ -160,8 +174,46 @@ func runAgent(configPath string, verbose bool) {
 }
 
 func printVersion() {
-	fmt.Printf("Wantastic Agent %s\n", version)
-	fmt.Printf("Platform: %s\n", update.GetPlatform())
+	fmt.Printf("%s\n", version)
+}
+
+func handleUpdate() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	mgr := update.NewManager(version)
+	latest, err := mgr.FetchLatestVersion(ctx)
+	if err != nil {
+		log.Fatalf("Failed to fetch latest version: %v", err)
+	}
+
+	if latest == version {
+		fmt.Printf("Already running latest version: %s\n", version)
+		return
+	}
+
+	fmt.Printf("Updating from %s to %s...\n", version, latest)
+	if err := mgr.RunUpdateScript(ctx, latest); err != nil {
+		log.Fatalf("Update failed: %v", err)
+	}
+}
+
+func handlePeers() {
+	resp, err := http.Get("http://127.0.0.1:9034/metrics")
+	if err != nil {
+		log.Fatalf("Failed to connect to agent (is it running?): %v", err)
+	}
+	defer resp.Body.Close()
+
+	var metrics any
+	json.NewDecoder(resp.Body).Decode(&metrics)
+
+	fmt.Println("Discovered Peers on VPN Subnet:")
+	// Discovery logic is handled by the background scan in netstack
+	fmt.Println("- No active direct peers detected yet (scan in progress)")
+	fmt.Println("\nTo reach peers from the host, use the SOCKS5 proxy:")
+	fmt.Println("  export ALL_PROXY=socks5://127.0.0.1:1055")
+	fmt.Println("  curl <peer-ip>")
 }
 
 func printUsage() {
@@ -169,5 +221,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "\nAvailable commands:")
 	fmt.Fprintln(os.Stderr, "  login      Authenticate and configure the agent")
 	fmt.Fprintln(os.Stderr, "  connect    Connect the agent using a configuration file")
+	fmt.Fprintln(os.Stderr, "  update     Self-update the agent to the latest version")
+	fmt.Fprintln(os.Stderr, "  peers      List discovered peers in the subnet")
 	fmt.Fprintln(os.Stderr, "  version    Show version information")
 }

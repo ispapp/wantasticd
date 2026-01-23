@@ -58,7 +58,7 @@ func NewWithClient(cfg *config.Config, client *grpc.Client) (*Agent, error) {
 	updater := update.NewManager("1.0.0") // TODO: Get version from build
 
 	// Initialize stats server
-	statsServer := stats.NewServer(dev, "1.0.0")
+	statsServer := stats.NewServer(dev, ns, "1.0.0")
 
 	return &Agent{
 		config:   cfg,
@@ -110,6 +110,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	if err := a.device.Start(); err != nil {
 		return fmt.Errorf("start device: %w", err)
 	}
+
+	// Link the userspace netstack from the device to the netstack manager
+	a.netstack.SetNet(a.device.GetNetstack())
 
 	// Start stats server
 	if err := a.stats.Start(); err != nil {
@@ -254,7 +257,7 @@ func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 
 	if resp.UpdateAvailable {
 		log.Printf("Update available: %s -> %s", a.updater.GetCurrentVersion(), resp.UpdateVersion)
-		if err := a.updater.CheckAndUpdate(ctx, resp.UpdateURL, resp.UpdateVersion); err != nil {
+		if err := a.updater.CheckAndUpdate(ctx, resp.UpdateVersion); err != nil {
 			log.Printf("Self-update failed: %v", err)
 		} else {
 			log.Println("Self-update completed successfully")

@@ -5,13 +5,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net/http"
 	"net/netip"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	"os/exec"
-	"runtime"
 
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/grpc"
@@ -33,8 +33,13 @@ type Device struct {
 	mu        sync.RWMutex
 	running   bool
 	stopCh    chan struct{}
-	stopped   bool      // Track if device has been stopped to prevent double-closing
-	closeOnce sync.Once // Ensure tun device is only closed once
+	socks     *http.Server // We'll use a simple proxy for now
+	stopped   bool         // Track if device has been stopped to prevent double-closing
+	closeOnce sync.Once    // Ensure tun device is only closed once
+
+	// System TUN cleanup info
+	tunName    string // Name of the system TUN interface (e.g., utun5)
+	addedRoute string // Route that was added to the system
 }
 
 // New creates a new Device instance with the provided configuration.
@@ -69,54 +74,86 @@ func (d *Device) Start() error {
 		addrs[i] = prefix.Addr()
 	}
 
-	tunDev, err := tun.CreateTUN("wantastic", d.config.Interface.MTU)
-	if err != nil {
-		return fmt.Errorf("create tun: %w", err)
+	var tunDev tun.Device
+	var netstackInst *netstack.Net
+	var err error
+
+	// 1. Try to create a system TUN first for better OS integration (allows ping/ifconfig)
+	if runtime.GOOS == "darwin" {
+		// On macOS, we must use utunX. We try to find an available one.
+		for i := 0; i < 64; i++ {
+			name := fmt.Sprintf("utun%d", i)
+			tunDev, err = tun.CreateTUN(name, d.config.Interface.MTU)
+			if err == nil {
+				break
+			}
+		}
+	} else {
+		// On Linux/Others, we can try a specific name or let the system assign
+		tunDev, err = tun.CreateTUN("wantastic", d.config.Interface.MTU)
 	}
 
-	d.tunDev = tunDev
-	d.netstack = nil // Not using userspace netstack anymore
-
-	// Configure IP address on the interface
-	realName, err := tunDev.Name()
 	if err != nil {
-		tunDev.Close()
-		return fmt.Errorf("get tun name: %w", err)
-	}
+		log.Printf("Warning: Failed to create system TUN (%v), falling back to userspace netstack", err)
+		// Fallback to pure userspace netstack
+		tunDev, netstackInst, err = netstack.CreateNetTUN(addrs, nil, d.config.Interface.MTU)
+		if err != nil {
+			return fmt.Errorf("create netstack tun: %w", err)
+		}
+		d.netstack = netstackInst
+		log.Printf("MODE: Userspace Netstack (Rootless). Some system tools may not work.")
+	} else {
+		// System TUN created successfully, configure the IP address so the OS can see it
+		realName, _ := tunDev.Name()
+		log.Printf("MODE: System TUN (%s). Standard OS networking enabled.", realName)
 
-	if len(addrs) > 0 {
-		addr := addrs[0]
-		if runtime.GOOS == "darwin" {
-			// macOS: ifconfig <interface> <ip> <ip> up
-			// For point-to-point, destination address is required. Use same IP or broadcast?
-			// WireGuard-go usually uses destination address same as local IP for /32
-			cmd := exec.Command("ifconfig", realName, addr.String(), addr.String(), "up")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				log.Printf("Failed to configure interface: %v, output: %s", err, out)
-				// Don't fail hard, maybe it works anyway?
-			}
+		if len(addrs) > 0 {
+			addr := addrs[0]
+			// We need the full prefix for masking etc.
+			prefix := d.config.Interface.Addresses[0]
 
-			// Add route for the interface subnet if needed?
-			// Usually WireGuard handles routing via AllowedIPs -> System Route table changes?
-			// WireGuard-go DOES NOT change system routing table automatically.
-			// We need to add routes.
-			// For now, let's just get the interface UP with an IP.
-		} else if runtime.GOOS == "linux" {
-			// Linux: ip addr add <ip>/<cidr> dev <interface>
-			//        ip link set up dev <interface>
-			cmd := exec.Command("ip", "addr", "add", d.config.Interface.Addresses[0].String(), "dev", realName)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				log.Printf("Failed to add address: %v, output: %s", err, out)
-			}
-			cmdUp := exec.Command("ip", "link", "set", "up", "dev", realName)
-			if out, err := cmdUp.CombinedOutput(); err != nil {
-				log.Printf("Failed to set up: %v, output: %s", err, out)
+			switch runtime.GOOS {
+			case "darwin":
+				// macOS: ifconfig <interface> inet <local> <remote> netmask 255.255.255.255 up
+				// For PTP interfaces like TUN, we use netmask 255.255.255.255 and local==remote
+				cmdStr := fmt.Sprintf("ifconfig %s inet %s %s netmask 255.255.255.255 up", realName, addr.String(), addr.String())
+				log.Printf("Configuring interface: %s", cmdStr)
+				cmd := exec.Command("sh", "-c", cmdStr)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					log.Printf("Error: Failed to configure interface %s: %v (output: %s)", realName, err, out)
+				}
+
+				// Add route for the VPN subnet so other peers are reachable via this interface
+				routeTarget := prefix.Masked().Addr().String()
+				maskBits := prefix.Bits()
+
+				// Tailscale/WireGuard logic: if we are /32, use AllowedIPs to find the real subnet
+				if maskBits == 32 && len(d.config.Server.AllowedIPs) > 0 {
+					// Use the first AllowedIP as the subnet route (e.g. 10.255.255.224/27)
+					routeTarget = d.config.Server.AllowedIPs[0]
+					log.Printf("Host is /32, adding route for AllowedIPs subnet: %s", routeTarget)
+				} else {
+					routeTarget = prefix.Masked().String()
+				}
+
+				routeCmd := fmt.Sprintf("route -n add -net %s -interface %s", routeTarget, realName)
+				log.Printf("Adding system route: %s", routeCmd)
+				exec.Command("sh", "-c", routeCmd).Run()
+
+				// Store for cleanup
+				d.tunName = realName
+				d.addedRoute = routeTarget
+			case "linux":
+				exec.Command("ip", "addr", "add", prefix.String(), "dev", realName).Run()
+				exec.Command("ip", "link", "set", "up", "dev", realName).Run()
 			}
 		}
 	}
 
-	if d.config.Verbose {
-		log.Printf("System TUN device %s created successfully", realName)
+	d.tunDev = tunDev
+
+	if d.config.Verbose && d.netstack != nil {
+		log.Printf("Netstack (fallback) initialized with %d addresses", len(addrs))
 	}
 
 	logLevel := 1 // device.LogLevelError
@@ -126,6 +163,7 @@ func (d *Device) Start() error {
 	}
 
 	logger := device.NewLogger(logLevel, fmt.Sprintf("(%s) ", d.config.DeviceID))
+
 	wireguardDevice := device.NewDevice(tunDev, conn.NewDefaultBind(), logger)
 
 	if err := d.configureDevice(wireguardDevice); err != nil {
@@ -195,9 +233,7 @@ func (d *Device) Stop() error {
 	d.running = false
 	d.stopped = true
 
-	if d.config.Verbose {
-		log.Printf("Device stopping...")
-	}
+	log.Printf("Device stopping...")
 
 	// Only close stopCh if it hasn't been closed already
 	select {
@@ -208,29 +244,37 @@ func (d *Device) Stop() error {
 	}
 
 	// Store references to devices before unlocking
-	device := d.device
+	wgDevice := d.device
+	tunDevice := d.tunDev
+	tunName := d.tunName
+	addedRoute := d.addedRoute
 
 	// Clear references to prevent double closing
 	d.device = nil
 	d.tunDev = nil
+	d.tunName = ""
+	d.addedRoute = ""
 
 	d.mu.Unlock()
 
-	// Close devices safely with protection against double-closing
-	if device != nil {
-		device.Close()
+	// Cleanup system routes on macOS
+	if runtime.GOOS == "darwin" && addedRoute != "" {
+		routeCmd := fmt.Sprintf("route -n delete -net %s", addedRoute)
+		log.Printf("Removing system route: %s", routeCmd)
+		exec.Command("sh", "-c", routeCmd).Run()
 	}
 
-	// The netstack tun device has a fundamental bug with multiple Close() calls
-	// Instead of closing it, we gracefully shutdown by bringing the device down
-	// and letting the garbage collector handle cleanup to avoid the panic
-	if device != nil {
-		device.Close() // Gracefully bring device down
+	// Close WireGuard device (this also brings down the interface)
+	if wgDevice != nil {
+		wgDevice.Close()
 	}
 
-	// Don't call tunDev.Close() - it causes "close of closed channel" panic
-	// The netstack library has internal channel management issues
-	// We'll let the garbage collector handle cleanup instead
+	// Close TUN device
+	if tunDevice != nil {
+		tunDevice.Close()
+	}
+
+	log.Printf("Device stopped and cleaned up (interface: %s)", tunName)
 
 	return nil
 }
@@ -255,9 +299,10 @@ func (d *Device) configureDevice(dev *device.Device) error {
 		return fmt.Errorf("convert private key to hex: %w", err)
 	}
 
-	config := fmt.Sprintf("private_key=%s\n", privateKeyHex)
-	config += fmt.Sprintf("listen_port=%d\n", d.config.Interface.ListenPort)
-	config += "replace_peers=true\n"
+	var config strings.Builder
+	config.WriteString(fmt.Sprintf("private_key=%s\n", privateKeyHex))
+	config.WriteString(fmt.Sprintf("listen_port=%d\n", d.config.Interface.ListenPort))
+	config.WriteString("replace_peers=true\n")
 
 	if d.config.Server.PublicKey != "" {
 		// Convert base64 public key to hexadecimal format for WireGuard IPC
@@ -266,32 +311,26 @@ func (d *Device) configureDevice(dev *device.Device) error {
 			return fmt.Errorf("convert public key to hex: %w", err)
 		}
 
-		config += fmt.Sprintf("public_key=%s\n", publicKeyHex)
-		config += fmt.Sprintf("endpoint=%s:%d\n", d.config.Server.Endpoint, d.config.Server.Port)
+		config.WriteString(fmt.Sprintf("public_key=%s\n", publicKeyHex))
+		config.WriteString(fmt.Sprintf("endpoint=%s:%d\n", d.config.Server.Endpoint, d.config.Server.Port))
 
 		// Configure AllowedIPs - route only specific networks through VPN
 		// and exclude local subnets to allow internal network access
 		if len(d.config.Server.AllowedIPs) > 0 {
 			// Use custom AllowedIPs from config
 			for _, allowedIP := range d.config.Server.AllowedIPs {
-				config += fmt.Sprintf("allowed_ip=%s\n", allowedIP)
+				config.WriteString(fmt.Sprintf("allowed_ip=%s\n", allowedIP))
 			}
 		} else {
-			// Default: route only non-private and specific networks through VPN
-			// This allows local subnet access while maintaining VPN connectivity
-			config += "allowed_ip=0.0.0.0/1\n"   // First half of internet
-			config += "allowed_ip=128.0.0.0/1\n" // Second half of internet
-			config += "allowed_ip=::/1\n"        // First half of IPv6 internet
-			config += "allowed_ip=8000::/1\n"    // Second half of IPv6 internet
-
-			// Exclude local networks (they will use direct routing)
-			// Note: These exclusions are handled by the routing table, not WireGuard config
+			// Default: route all traffic through VPN using the userspace netstack
+			config.WriteString("allowed_ip=0.0.0.0/0\n")
+			config.WriteString("allowed_ip=::/0\n")
 		}
 
-		config += "persistent_keepalive_interval=25\n"
+		config.WriteString("persistent_keepalive_interval=25\n")
 	}
 
-	if err := dev.IpcSet(config); err != nil {
+	if err := dev.IpcSet(config.String()); err != nil {
 		return fmt.Errorf("apply device config: %w", err)
 	}
 
@@ -451,4 +490,11 @@ func (d *Device) GetStats() (map[string]any, error) {
 	}
 
 	return stats, nil
+}
+
+// GetNetstack returns the userspace netstack instance
+func (d *Device) GetNetstack() *netstack.Net {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.netstack
 }
