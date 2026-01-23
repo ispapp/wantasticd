@@ -58,10 +58,6 @@ func (ns *Netstack) scanSubnet() {
 	stack := ns.net
 	ns.mu.RUnlock()
 
-	if stack == nil {
-		return
-	}
-
 	var activePeers []string
 	if len(ns.config.Interface.Addresses) > 0 {
 		addr := ns.config.Interface.Addresses[0].Addr()
@@ -77,8 +73,17 @@ func (ns *Netstack) scanSubnet() {
 			target := net.IPv4(base[0], base[1], base[2], byte(i))
 
 			for _, port := range checkPorts {
-				// Use DialTCP directly or via context
-				conn, err := stack.DialTCP(&net.TCPAddr{IP: target, Port: port})
+				var err error
+				var conn net.Conn
+
+				if stack != nil {
+					// Use gVisor netstack in userspace mode
+					conn, err = stack.DialTCP(&net.TCPAddr{IP: target, Port: port})
+				} else {
+					// Use OS network stack in System TUN mode
+					conn, err = net.DialTimeout("tcp", net.JoinHostPort(target.String(), strconv.Itoa(port)), 500*time.Millisecond)
+				}
+
 				if err == nil {
 					activePeers = append(activePeers, target.String())
 					conn.Close()
@@ -147,22 +152,13 @@ func (ns *Netstack) SetNet(netInst *netstack.Net) {
 	ns.net = netInst
 	ns.mu.Unlock()
 
-	// If netInst is nil, it means we are using a System TUN.
-	// We should NOT start userspace forwarders or proxies.
 	if netInst == nil {
-		log.Printf("Netstack: System TUN mode detected. Skipping userspace forwarders.")
-		return
+		log.Printf("Netstack: System TUN mode. Discovery and stats will use OS stack.")
+	} else {
+		log.Printf("Netstack: Userspace mode. Discovery and stats will use gVisor stack.")
+		// Start SOCKS5 proxy to allow Host -> VPN connectivity
+		go ns.startSOCKS5Proxy()
 	}
-
-	// Setup broad forwarders for many common services to ensure robustness (VPN -> Host)
-	// This covers web, terminal, dev tools, and common database ports
-	commonPorts := []int{22, 80, 443, 3000, 3306, 5432, 6379, 8000, 8080, 9000, 9034, 9090, 9443}
-	for _, port := range commonPorts {
-		go ns.startForwarder(port)
-	}
-
-	// Start SOCKS5 proxy to allow Host -> VPN connectivity
-	go ns.startSOCKS5Proxy()
 
 	// Start internal mDNS responder for discovery
 	go ns.startMDNSResponder()
@@ -176,15 +172,21 @@ func (ns *Netstack) startMDNSResponder() {
 	stack := ns.net
 	ns.mu.RUnlock()
 
-	if stack == nil {
-		return
-	}
-
 	// mDNS standard address: 224.0.0.251:5353
 	addr := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
-	conn, err := stack.ListenUDP(addr)
+
+	var conn net.PacketConn
+	var err error
+
+	if stack != nil {
+		conn, err = stack.ListenUDP(addr)
+	} else {
+		// Use OS network stack (might fail if port 5353 is already taken by system mDNS)
+		conn, err = net.ListenMulticastUDP("udp", nil, addr)
+	}
+
 	if err != nil {
-		log.Printf("Netstack: Failed to start mDNS responder: %v", err)
+		log.Printf("Netstack: mDNS discovery limited (could not bind 5353): %v", err)
 		return
 	}
 	defer conn.Close()
@@ -321,60 +323,6 @@ func (ns *Netstack) handleSOCKS5(client net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() { io.Copy(dest, client); done <- struct{}{} }()
 	go func() { io.Copy(client, dest); done <- struct{}{} }()
-	<-done
-}
-
-func (ns *Netstack) startForwarder(port int) {
-	ns.mu.RLock()
-	stackNet := ns.net
-	ns.mu.RUnlock()
-
-	if stackNet == nil {
-		return
-	}
-
-	addr := &net.TCPAddr{Port: port}
-	listener, err := stackNet.ListenTCP(addr)
-	if err != nil {
-		log.Printf("Netstack: Failed to listen on port %d: %v", port, err)
-		return
-	}
-	defer listener.Close()
-
-	log.Printf("Netstack: Listening for connections on port %d (forwarding to host)", port)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-
-		go ns.handleForward(conn, port)
-	}
-}
-
-func (ns *Netstack) handleForward(vpnConn net.Conn, port int) {
-	defer vpnConn.Close()
-
-	// Forward to localhost on the same port
-	hostConn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
-	if err != nil {
-		log.Printf("Netstack: Failed to connect to host service on port %d: %v", port, err)
-		return
-	}
-	defer hostConn.Close()
-
-	// Bidirectional copy
-	done := make(chan struct{}, 2)
-	go func() {
-		io.Copy(vpnConn, hostConn)
-		done <- struct{}{}
-	}()
-	go func() {
-		io.Copy(hostConn, vpnConn)
-		done <- struct{}{}
-	}()
-
 	<-done
 }
 

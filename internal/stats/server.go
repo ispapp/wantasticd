@@ -82,6 +82,9 @@ type Metrics struct {
 		Version string `json:"version"`
 		Status  string `json:"status"`
 	} `json:"agent"`
+
+	// Mesh metrics (for Linux embedded devices)
+	Mesh *MeshInfo `json:"mesh,omitempty"`
 }
 
 // InterfaceInfo represents network interface details
@@ -134,6 +137,24 @@ type TrafficStats struct {
 	TotalRx uint64 `json:"total_rx"`
 	TxRate  uint64 `json:"tx_rate"` // bytes per second
 	RxRate  uint64 `json:"rx_rate"` // bytes per second
+}
+
+// MeshInfo represents mesh network information
+type MeshInfo struct {
+	Protocol string    `json:"protocol"` // "easymesh", "openmesh", etc
+	Role     string    `json:"role"`     // "controller", "agent", etc
+	IsCenter bool      `json:"is_center"`
+	Topology *MeshNode `json:"topology,omitempty"`
+}
+
+// MeshNode represents a node in the mesh topology
+type MeshNode struct {
+	Name     string      `json:"name"`
+	MAC      string      `json:"mac"`
+	IP       string      `json:"ip,omitempty"`
+	Signal   int         `json:"signal,omitempty"`
+	Role     string      `json:"role,omitempty"`
+	Children []*MeshNode `json:"children,omitempty"`
 }
 
 // NewServer creates a new stats server instance
@@ -326,9 +347,13 @@ func (s *Server) collectMetrics() Metrics {
 	m.WireGuard.Throughput.RxBytes = 2 * 1024 * 1024 // 2MB
 
 	// Agent metrics
-	m.Agent.Uptime = fmt.Sprintf("%.0fs", time.Since(s.startTime).Seconds())
+	// Agent metrics (Host Uptime)
+	m.Agent.Uptime = fmt.Sprintf("%.0fs", getHostUptime())
 	m.Agent.Version = "1.0.0"
 	m.Agent.Status = "running"
+
+	// Mesh Statistics (Linux embedded only)
+	m.Mesh = collectMeshStatistics()
 
 	return m
 }

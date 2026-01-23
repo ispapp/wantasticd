@@ -291,7 +291,8 @@ func (c *Config) Validate() error {
 		c.Interface.MTU = 1420
 	}
 	if c.Interface.ListenPort == 0 {
-		c.Interface.ListenPort = 51820
+		// Standard client behavior: use random port to avoid conflicts
+		c.Interface.ListenPort = 0
 	}
 	if c.Auth.RefreshTime == 0 {
 		c.Auth.RefreshTime = 24 * time.Hour

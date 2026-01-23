@@ -3,13 +3,18 @@
 package stats
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/mdlayher/genetlink"
+	"github.com/mdlayher/netlink"
 	"github.com/mdlayher/wifi"
 )
 
@@ -250,6 +255,264 @@ func getInterfaceMAC(ifaceName string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// collectMeshStatistics detects and collects mesh network data
+func collectMeshStatistics() *MeshInfo {
+	// 1. Try OpenMesh (BATMAN) via Netlink
+	if mesh := collectOpenMeshNetlink(); mesh != nil {
+		return mesh
+	}
+
+	// 2. Try EasyMesh (IEEE 1905.1)
+	if mesh := collectEasyMeshLowLevel(); mesh != nil {
+		return mesh
+	}
+
+	return nil
+}
+
+func collectEasyMeshLowLevel() *MeshInfo {
+	// Protocol check: IEEE 1905.1 (EasyMesh) uses EtherType 0x893a
+	// Low level check: see if the ether-type is handled by any socket/daemon
+	// or look for the 1905.1 configuration files/daemons
+	isEasyMesh := false
+
+	// Check for common EasyMesh daemons/state
+	paths := []string{
+		"/usr/sbin/map-agent",
+		"/usr/sbin/map-controller",
+		"/etc/config/multiap",
+		"/tmp/state/multiap",
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			isEasyMesh = true
+			break
+		}
+	}
+
+	// Low-level check: Check bridge FDB for Multi-AP multicast MAC (01:80:c2:00:00:13)
+	if !isEasyMesh {
+		if checkBridgeFDBForMultiAP() {
+			isEasyMesh = true
+		}
+	}
+
+	if !isEasyMesh {
+		return nil
+	}
+
+	// If we detected EasyMesh, use the primary IPC (ubus) to get the topology
+	return collectEasyMesh()
+}
+
+func checkBridgeFDBForMultiAP() bool {
+	// Multi-AP / IEEE 1905.1 multicast MAC
+	const multiAPMAC = "01:80:c2:00:00:13"
+
+	fdb, err := os.ReadFile("/proc/net/bridge/fdb")
+	if err != nil {
+		// Try alternative: /sys/class/net/br-*/brforward
+		return false
+	}
+
+	return strings.Contains(string(fdb), multiAPMAC)
+}
+
+func collectOpenMeshNetlink() *MeshInfo {
+	// Generic Netlink constants for batman-adv
+	const (
+		batadvFamilyName        = "batadv"
+		batadvCmdGetOriginators = 1
+		batadvAttrOriginator    = 1
+		batadvAttrNeighbor      = 2
+		batadvAttrTQ            = 3
+		batadvAttrMeshIface     = 7 // dev index
+	)
+
+	// Dial Generic Netlink
+	c, err := genetlink.Dial(nil)
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+
+	// Resolve the batman-adv family
+	f, err := c.GetFamily(batadvFamilyName)
+	if err != nil {
+		return nil
+	}
+
+	mesh := &MeshInfo{
+		Protocol: "openmesh",
+		Role:     "node",
+		IsCenter: false,
+	}
+
+	// Check gateway mode via sysfs
+	if data, err := os.ReadFile("/sys/class/net/bat0/mesh/gw_mode"); err == nil {
+		mode := strings.TrimSpace(string(data))
+		if mode == "server" {
+			mesh.IsCenter = true
+			mesh.Role = "gateway"
+		}
+	}
+
+	// Get bat0 ifindex
+	batIface, err := net.InterfaceByName("bat0")
+	if err != nil {
+		return nil
+	}
+
+	// Build request for originators
+	ae := netlink.NewAttributeEncoder()
+	ae.Uint32(batadvAttrMeshIface, uint32(batIface.Index))
+	b, err := ae.Encode()
+	if err != nil {
+		return nil
+	}
+
+	req := genetlink.Message{
+		Header: genetlink.Header{
+			Command: batadvCmdGetOriginators,
+			Version: f.Version,
+		},
+		Data: b,
+	}
+
+	msgs, err := c.Execute(req, f.ID, netlink.Request|netlink.Dump)
+	if err != nil {
+		return nil
+	}
+
+	root := &MeshNode{Name: "Mesh Originators", Role: mesh.Role}
+	for _, m := range msgs {
+		ad, err := netlink.NewAttributeDecoder(m.Data)
+		if err != nil {
+			continue
+		}
+
+		var origMAC net.HardwareAddr
+		var tq uint8
+
+		for ad.Next() {
+			switch ad.Type() {
+			case batadvAttrOriginator:
+				origMAC = ad.Bytes()
+			case batadvAttrTQ:
+				tq = ad.Uint8()
+			}
+		}
+
+		if origMAC != nil {
+			sig := -100 + (int(tq) * 70 / 255)
+			root.Children = append(root.Children, &MeshNode{
+				Name:   fmt.Sprintf("Originator %s", origMAC.String()),
+				MAC:    origMAC.String(),
+				Signal: sig,
+				Role:   "peer",
+			})
+		}
+	}
+
+	if len(root.Children) > 0 {
+		mesh.Topology = root
+		return mesh
+	}
+
+	return nil
+}
+
+func collectEasyMesh() *MeshInfo {
+	// Check if ubus is available
+	if _, err := exec.LookPath("ubus"); err != nil {
+		return nil
+	}
+
+	// Try to get EasyMesh topology
+	out, err := exec.Command("ubus", "call", "ieee1905.topology", "get").Output()
+	if err != nil {
+		return nil
+	}
+
+	var data struct {
+		IsController bool `json:"is_controller"`
+		Nodes        []struct {
+			MAC      string `json:"mac"`
+			Hops     int    `json:"hops"`
+			Upstream string `json:"upstream"`
+			Type     string `json:"type"`
+		} `json:"nodes"`
+	}
+
+	if err := json.Unmarshal(out, &data); err != nil {
+		return nil
+	}
+
+	mesh := &MeshInfo{
+		Protocol: "easymesh",
+		Role:     "agent",
+		IsCenter: data.IsController,
+	}
+	if data.IsController {
+		mesh.Role = "controller"
+	}
+
+	// Build a simple tree for the topology if we are the center
+	if data.IsController && len(data.Nodes) > 0 {
+		root := &MeshNode{Name: "Controller", Role: "controller"}
+		nodeMap := make(map[string]*MeshNode)
+
+		for _, n := range data.Nodes {
+			node := &MeshNode{
+				MAC:  n.MAC,
+				Role: n.Type,
+			}
+			nodeMap[n.MAC] = node
+		}
+
+		for _, n := range data.Nodes {
+			if n.Upstream == "" || n.Upstream == "00:00:00:00:00:00" {
+				root.Children = append(root.Children, nodeMap[n.MAC])
+			} else if parent, ok := nodeMap[strings.ToLower(n.Upstream)]; ok {
+				parent.Children = append(parent.Children, nodeMap[n.MAC])
+			}
+		}
+		mesh.Topology = root
+	}
+
+	return mesh
+}
+
+func calculateSignalFromBatman(fields []string) int {
+	// Example BATMAN output: eth0   00:11:22:33:44:55   ( 234) [  1.0]
+	// TQ (Transmission Quality) is usually in the parentheses
+	for _, f := range fields {
+		if strings.HasPrefix(f, "(") && strings.HasSuffix(f, ")") {
+			tqStr := strings.Trim(f, "()")
+			if tq, err := strconv.Atoi(tqStr); err == nil {
+				// Convert TQ (0-255) to a pseudo-signal strength (-100 to -30)
+				return -100 + (tq * 70 / 255)
+			}
+		}
+	}
+	return 0
+}
+
+// getHostUptime returns the host device uptime in seconds
+func getHostUptime() float64 {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	parts := strings.Fields(string(data))
+	if len(parts) > 0 {
+		if uptime, err := strconv.ParseFloat(parts[0], 64); err == nil {
+			return uptime
+		}
+	}
+	return 0
 }
 
 // readUint64FromFile reads a uint64 value from a file

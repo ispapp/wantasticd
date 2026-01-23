@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // collectWiFiStatistics - implementation for macOS using system_profiler
@@ -111,7 +112,14 @@ func collectWiFiStatistics() ([]WiFiInterfaceInfo, bool) {
 			if i+1 < len(lines) {
 				nextLine := lines[i+1]
 				if strings.HasPrefix(nextLine, "            ") && strings.HasSuffix(strings.TrimSpace(nextLine), ":") {
-					currentIface.SSID = strings.TrimSpace(strings.TrimSuffix(nextLine, ":"))
+					ssid := strings.TrimSpace(strings.TrimSuffix(nextLine, ":"))
+					if ssid == "<redacted>" || ssid == "" {
+						// Fallback: try to get SSID via airport utility
+						if realSSID, err := getSSIDFromAirport(); err == nil && realSSID != "" {
+							ssid = realSSID
+						}
+					}
+					currentIface.SSID = ssid
 					i++ // Skip SSID line
 				}
 			}
@@ -171,7 +179,10 @@ func collectWiFiStatistics() ([]WiFiInterfaceInfo, bool) {
 						}
 						j = k
 					}
-					currentIface.Nearby = append(currentIface.Nearby, nearby)
+					// Only include nearby networks with real SSIDs (filter out <redacted>)
+					if nearby.SSID != "" && nearby.SSID != "<redacted>" {
+						currentIface.Nearby = append(currentIface.Nearby, nearby)
+					}
 				}
 				i = j
 			}
@@ -191,6 +202,44 @@ func collectWiFiStatistics() ([]WiFiInterfaceInfo, bool) {
 	}
 
 	return interfaces, connected
+}
+
+// getSSIDFromAirport attempts to get the SSID using the deprecated airport utility
+// which often bypasses redaction if system_profiler is restricted.
+func getSSIDFromAirport() (string, error) {
+	out, err := exec.Command("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", "-I").Output()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "SSID: ") {
+			return strings.TrimPrefix(trimmed, "SSID: "), nil
+		}
+	}
+	return "", nil
+}
+
+// getHostUptime returns the host device uptime in seconds
+func getHostUptime() float64 {
+	out, err := exec.Command("sysctl", "-n", "kern.boottime").Output()
+	if err != nil {
+		return 0
+	}
+	// Output format: { sec = 1706050000, usec = 0 } Fri Jan 24 ...
+	s := string(out)
+	if idx := strings.Index(s, "sec = "); idx != -1 {
+		s = s[idx+6:]
+		if comma := strings.Index(s, ","); comma != -1 {
+			s = s[:comma]
+			if bootTime, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return time.Since(time.Unix(bootTime, 0)).Seconds()
+			}
+		}
+	}
+	return 0
 }
 
 // collectNetworkInterfaceStatistics collects network interface statistics using net package and netstat
@@ -257,4 +306,9 @@ func getInterfaceStats(name string) (uint64, uint64, error) {
 	}
 
 	return 0, 0, nil
+}
+
+// collectMeshStatistics - stub for macOS
+func collectMeshStatistics() *MeshInfo {
+	return nil
 }

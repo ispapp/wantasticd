@@ -167,8 +167,17 @@ func (d *Device) Start() error {
 	wireguardDevice := device.NewDevice(tunDev, conn.NewDefaultBind(), logger)
 
 	if err := d.configureDevice(wireguardDevice); err != nil {
-		tunDev.Close()
-		return fmt.Errorf("configure device: %w", err)
+		if strings.Contains(err.Error(), "bind: address already in use") {
+			log.Printf("Port %d is in use, trying a random port...", d.config.Interface.ListenPort)
+			d.config.Interface.ListenPort = 0
+			if err := d.configureDevice(wireguardDevice); err != nil {
+				tunDev.Close()
+				return fmt.Errorf("configure device (retry): %w", err)
+			}
+		} else {
+			tunDev.Close()
+			return fmt.Errorf("configure device: %w", err)
+		}
 	}
 
 	if d.config.Verbose {
@@ -271,7 +280,13 @@ func (d *Device) Stop() error {
 
 	// Close TUN device
 	if tunDevice != nil {
-		tunDevice.Close()
+		// Use a defer/recover block because the netstack TUN implementation
+		// can panic with "close of closed channel" if closed in the wrong order
+		// or multiple times.
+		func() {
+			defer func() { recover() }()
+			tunDevice.Close()
+		}()
 	}
 
 	log.Printf("Device stopped and cleaned up (interface: %s)", tunName)
