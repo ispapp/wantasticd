@@ -34,7 +34,7 @@ type Device struct {
 	tunName     string
 	addedRoutes []string
 
-	PortForwarder func(string, int)
+	PortForwarder func(string, int) bool
 }
 
 func New(cfg *config.Config) (*Device, error) {
@@ -197,13 +197,11 @@ func (d *Device) HasActiveHandshake() bool {
 		return false
 	}
 
-	// Simple check: if we have any peer with a handshake in the last 3 minutes
-	// IpcGet returns the whole config, from which we can extract peer stats
-	peers, err := wd.IpcGet()
+	res, err := wd.IpcGet()
 	if err != nil {
 		return false
 	}
-	lines := strings.Split(peers, "\n")
+	lines := strings.Split(res, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "last_handshake_time_sec=") {
 			parts := strings.Split(line, "=")
@@ -216,6 +214,38 @@ func (d *Device) HasActiveHandshake() bool {
 		}
 	}
 	return false
+}
+
+func (d *Device) GetTransferStats() (uint64, uint64, error) {
+	d.mu.RLock()
+	wd := d.device
+	d.mu.RUnlock()
+	if wd == nil {
+		return 0, 0, fmt.Errorf("device not started")
+	}
+
+	res, err := wd.IpcGet()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	var rx, tx uint64
+	lines := strings.Split(res, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "rx_bytes=") {
+			parts := strings.Split(line, "=")
+			if n, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+				rx += n
+			}
+		}
+		if strings.HasPrefix(line, "tx_bytes=") {
+			parts := strings.Split(line, "=")
+			if n, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+				tx += n
+			}
+		}
+	}
+	return rx, tx, nil
 }
 
 func (d *Device) GetNetstack() *virtstack.Net { return d.netstack }

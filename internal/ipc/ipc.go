@@ -113,7 +113,6 @@ func (s *Server) handleConnection(c net.Conn) {
 
 		// Check if target contains network hint or if we have 3 parts
 		// Protocol: CONNECT <network> <addr> OR CONNECT <addr> (legacy)
-		// We already split by " " into 2 parts. If target has spaces, it might be the new format.
 		// Re-split line to be safe.
 		parts := strings.Split(line, " ")
 		if len(parts) >= 3 {
@@ -121,7 +120,10 @@ func (s *Server) handleConnection(c net.Conn) {
 			addr = parts[2]
 		}
 
-		targetConn, err := s.netstack.DialContext(context.Background(), network, addr)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		targetConn, err := s.netstack.DialContext(ctx, network, addr)
 		if err != nil {
 			fmt.Fprintf(c, "ERROR dial failed: %v\n", err)
 			return
@@ -129,7 +131,15 @@ func (s *Server) handleConnection(c net.Conn) {
 		defer targetConn.Close()
 
 		fmt.Fprintf(c, "OK\n")
-		go io.Copy(targetConn, c)
+
+		// Handle potential buffered data from 'r'
+		var clientReader io.Reader = c
+		if r.Buffered() > 0 {
+			clientReader = io.MultiReader(io.LimitReader(r, int64(r.Buffered())), c)
+		}
+
+		// Bidirectional copy
+		go io.Copy(targetConn, clientReader)
 		io.Copy(c, targetConn)
 
 	case "PING":

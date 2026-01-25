@@ -27,10 +27,20 @@
             const wgPeersItems = document.getElementById('wg-peers-items');
             if (wgPeersItems && data.wireguard.peers_list) {
                 if (data.wireguard.peers_list.length > 0) {
-                    wgPeersItems.innerHTML = data.wireguard.peers_list.map(ip => `
-                        <div class="nearby-item">
-                            <span class="nearby-ssid">${ip}</span>
-                            <span class="badge badge-success" style="font-size: 9px; padding: 2px 6px;">Active</span>
+                    wgPeersItems.innerHTML = data.wireguard.peers_list.map(peer => `
+                        <div class="nearby-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                            <div style="display: flex; width: 100%; justify-content: space-between; align-items: center;">
+                                <span class="nearby-ssid" style="font-weight: 600;">${peer.ip}</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    ${peer.latency_ms ? `<span style="font-size: 10px; color: var(--text-secondary);">${peer.latency_ms}ms</span>` : ''}
+                                    <span class="badge badge-success" style="font-size: 9px; padding: 2px 6px;">Active</span>
+                                </div>
+                            </div>
+                            <div style="font-size: 10px; color: var(--text-secondary); display: flex; gap: 8px;">
+                                <span>${peer.hostname || 'unknown'}</span>
+                                <span style="opacity: 0.5;">|</span>
+                                <span>${peer.os || 'unknown'}</span>
+                            </div>
                         </div>
                     `).join('');
                 } else {

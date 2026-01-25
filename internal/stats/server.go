@@ -67,10 +67,10 @@ type Metrics struct {
 
 	// WireGuard device metrics
 	WireGuard struct {
-		Connected  bool     `json:"connected"`
-		PublicKey  string   `json:"public_key"`
-		Peers      int      `json:"peers"`
-		PeersList  []string `json:"peers_list"`
+		Connected  bool                      `json:"connected"`
+		PublicKey  string                    `json:"public_key"`
+		Peers      int                       `json:"peers"`
+		PeersList  []agent_netstack.PeerInfo `json:"peers_list"`
 		Throughput struct {
 			TxBytes uint64 `json:"tx_bytes"`
 			RxBytes uint64 `json:"rx_bytes"`
@@ -352,18 +352,18 @@ func (s *Server) collectMetrics() Metrics {
 	var m Metrics
 	m.Timestamp = time.Now()
 	m.Hostname, _ = os.Hostname()
-	m.Platform = "darwin"
+	m.Platform = runtime.GOOS
 
 	// System metrics
 	m.CPU.Cores = runtime.NumCPU()
 	m.CPU.Arch = runtime.GOARCH
-	m.CPU.Usage = "0%" // Simplified - would use proper monitoring in production
+	m.CPU.Usage = collectCPUUsage()
 
 	// Memory metrics (simplified)
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 	m.Memory.Allocated = memStats.Alloc
-	m.Memory.Total = 1024 * 1024 * 1024 // 1GB default - would use proper system info
+	m.Memory.Total = collectMemoryTotal()
 
 	// Network interfaces - collect from host device statistics
 	m.Network.Interfaces = collectNetworkInterfaceStatistics()
@@ -389,12 +389,13 @@ func (s *Server) collectMetrics() Metrics {
 	m.WireGuard.PublicKey = s.device.GetPublicKey()
 
 	// Try to get peers from netstack if available
-	peers := s.netstack.DiscoverPeers()
+	peers := s.netstack.DiscoverPeersDetail()
 	m.WireGuard.Peers = len(peers)
 	m.WireGuard.PeersList = peers
 
-	m.WireGuard.Throughput.TxBytes = 1024 * 1024     // 1MB
-	m.WireGuard.Throughput.RxBytes = 2 * 1024 * 1024 // 2MB
+	rx, tx, _ := s.device.GetTransferStats()
+	m.WireGuard.Throughput.RxBytes = rx
+	m.WireGuard.Throughput.TxBytes = tx
 
 	// Agent metrics
 	// Agent metrics (Host Uptime)

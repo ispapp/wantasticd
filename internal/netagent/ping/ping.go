@@ -12,6 +12,10 @@ import (
 
 type DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
+type Pinger interface {
+	Ping(ctx context.Context, host string) (time.Duration, error)
+}
+
 type Stats struct {
 	Sent     int
 	Received int
@@ -20,7 +24,7 @@ type Stats struct {
 	TotalRTT time.Duration
 }
 
-func Run(ctx context.Context, dial DialContext, host string, count int, interval time.Duration) error {
+func Run(ctx context.Context, dial DialContext, pinger Pinger, host string, count int, interval time.Duration) error {
 	fmt.Printf("PING %s (%s): via wantasticd netstack\n", host, host)
 
 	stats := &Stats{
@@ -39,7 +43,7 @@ func Run(ctx context.Context, dial DialContext, host string, count int, interval
 		// Attempt ICMP via dialer (daemon should handle "ping" protocol)
 		// Or fallback to TCP SYN if "ping" fails
 		var rtt time.Duration
-		err := tryPing(ctx, dial, host, &rtt)
+		err := tryPing(ctx, dial, pinger, host, &rtt)
 
 		if err != nil {
 			fmt.Printf("Request timeout for seq %d\n", seq)
@@ -79,22 +83,33 @@ func Run(ctx context.Context, dial DialContext, host string, count int, interval
 	return nil
 }
 
-func tryPing(ctx context.Context, dial DialContext, host string, rtt *time.Duration) error {
+func tryPing(ctx context.Context, dial DialContext, pinger Pinger, host string, rtt *time.Duration) error {
 	start := time.Now()
-	// 1. Try ICMP "ping" protocol (gvisor specific)
-	ctxPing, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
+	// 1. Try ICMP "ping" protocol
+	// If Pinger interface is provided (e.g. IPC specialized ping), use it.
+	if pinger != nil {
+		d, err := pinger.Ping(ctx, host)
+		if err == nil {
+			*rtt = d
+			return nil
+		}
+		// If specialized ping fails, fallback to stream ping (if implemented) or TCP
+	} else {
+		// Legacy / Stream Ping logic
+		ctxPing, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
 
-	conn, err := dial(ctxPing, "ping", host)
-	if err == nil {
-		defer conn.Close()
-		conn.SetDeadline(time.Now().Add(2 * time.Second))
-		msg := []byte("WANT")
-		if _, err := conn.Write(msg); err == nil {
-			buf := make([]byte, 64)
-			if n, err := conn.Read(buf); err == nil && n >= 0 {
-				*rtt = time.Since(start)
-				return nil
+		conn, err := dial(ctxPing, "ping", host)
+		if err == nil {
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(2 * time.Second))
+			msg := []byte("WANT")
+			if _, err := conn.Write(msg); err == nil {
+				buf := make([]byte, 64)
+				if n, err := conn.Read(buf); err == nil && n >= 0 {
+					*rtt = time.Since(start)
+					return nil
+				}
 			}
 		}
 	}
@@ -104,7 +119,7 @@ func tryPing(ctx context.Context, dial DialContext, host string, rtt *time.Durat
 	ctxTCP, cancelTCP := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancelTCP()
 
-	conn, err = dial(ctxTCP, "tcp", net.JoinHostPort(host, "22"))
+	conn, err := dial(ctxTCP, "tcp", net.JoinHostPort(host, "22"))
 	if err == nil {
 		conn.Close()
 		*rtt = time.Since(start)

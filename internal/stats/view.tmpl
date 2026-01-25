@@ -370,9 +370,19 @@
                     <div class="nearby-title">Discovered Neighbors</div>
                     <div id="wg-peers-items" style="max-height: 100px; overflow-y: auto;">
                         {{range .WireGuard.PeersList}}
-                        <div class="nearby-item">
-                            <span class="nearby-ssid">{{.}}</span>
-                            <span class="badge badge-success" style="font-size: 9px; padding: 2px 6px;">Active</span>
+                        <div class="nearby-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                            <div style="display: flex; width: 100%; justify-content: space-between; align-items: center;">
+                                <span class="nearby-ssid" style="font-weight: 600;">{{.IP}}</span>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    {{if .LatencyMs}}<span style="font-size: 10px; color: var(--text-secondary);">{{.LatencyMs}}ms</span>{{end}}
+                                    <span class="badge badge-success" style="font-size: 9px; padding: 2px 6px;">Active</span>
+                                </div>
+                            </div>
+                            <div style="font-size: 10px; color: var(--text-secondary); display: flex; gap: 8px;">
+                                <span>{{if .Hostname}}{{.Hostname}}{{else}}unknown{{end}}</span>
+                                <span style="opacity: 0.5;">|</span>
+                                <span>{{if .OS}}{{.OS}}{{else}}unknown{{end}}</span>
+                            </div>
                         </div>
                         {{else}}
                         <div style="font-size: 11px; color: var(--text-secondary); text-align: center; padding: 8px;">No neighbors detected</div>

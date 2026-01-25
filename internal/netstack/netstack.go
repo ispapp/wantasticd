@@ -25,93 +25,123 @@ import (
 
 // PeerInfo represents a discovered host on the VPN
 type PeerInfo struct {
-	IP       string `json:"ip"`
-	Hostname string `json:"hostname,omitempty"`
-	OS       string `json:"os,omitempty"`
-	Alive    bool   `json:"alive"`
+	IP        string `json:"ip"`
+	Hostname  string `json:"hostname,omitempty"`
+	OS        string `json:"os,omitempty"`
+	Alive     bool   `json:"alive"`
+	LatencyMs int64  `json:"latency_ms,omitempty"`
 }
 
 // Netstack handles the userspace networking stack.
 // It is used when the agent runs in rootless mode.
 type Netstack struct {
-	config    *config.Config
-	net       *virtstack.Net
-	mu        sync.RWMutex
-	listeners map[int]net.Listener
+	config        *config.Config
+	net           *virtstack.Net
+	mu            sync.RWMutex
+	listeners     map[int]net.Listener
+	negativeCache map[int]time.Time
 }
 
 func New(cfg *config.Config) (*Netstack, error) {
 	return &Netstack{
-		config:    cfg,
-		listeners: make(map[int]net.Listener),
+		config:        cfg,
+		listeners:     make(map[int]net.Listener),
+		negativeCache: make(map[int]time.Time),
 	}, nil
 }
 
-func (ns *Netstack) EnsurePortForward(proto string, port int) {
+func (ns *Netstack) EnsurePortForward(proto string, port int) bool {
 	if proto == "icmp" {
 		// ICMP is usually handled internally by gvisor.
-		// Triggering here ensures we don't drop the first ping request if the stack is icy.
-		return
+		return true
 	}
 
 	if proto != "tcp" {
-		return
+		return true
 	}
 
 	ns.mu.RLock()
 	if ns.net == nil {
 		ns.mu.RUnlock()
-		return
+		return true
 	}
 	if _, exists := ns.listeners[port]; exists {
 		ns.mu.RUnlock()
-		return
+		return true
+	}
+	// Check negative cache
+	if expiry, hit := ns.negativeCache[port]; hit && time.Now().Before(expiry) {
+		ns.mu.RUnlock()
+		// It's closed. Return TRUE to let gvisor send RST (Honest).
+		// returning FALSE would drop it (Stealth).
+		// RST is better for "Connection Refused" feedback.
+		return true
 	}
 	ns.mu.RUnlock()
 
-	// BE HONEST: Only bind the virtual listener if the local host is actually listening.
-	// We use a very short timeout to avoid delaying real traffic significantly.
-	hostConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 50*time.Millisecond)
-	if err != nil {
-		// Host is not listening (or we couldn't reach it).
-		// We don't bind, allowing the virtual stack to send a RST honestly.
-		return
-	}
-	hostConn.Close()
+	// Miss: We need to check if the port is open on the host.
+	// We do this asynchronously to avoid blocking the packet processing loop.
+	// We return FALSE to DROP this packet. The client will retry.
 
-	ns.mu.Lock()
-	// Re-check existence under write lock
-	if _, exists := ns.listeners[port]; exists {
-		ns.mu.Unlock()
-		return
-	}
+	go func(targetPort int) {
+		// We use extremely short timeouts and avoid DNS (localhost) to ensure performance.
+		// We check both IPv4 and IPv6 loopback.
+		var open bool
 
-	addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		ns.mu.Unlock()
-		return
-	}
-
-	l, err := ns.net.ListenTCP(addr)
-	if err != nil {
-		ns.mu.Unlock()
-		return
-	}
-
-	ns.listeners[port] = l
-	ns.mu.Unlock()
-
-	log.Printf("JIT Listener active on TCP/%d (Verified host service)", port)
-
-	go func() {
-		for {
-			client, err := l.Accept()
-			if err != nil {
-				return
+		// Check IPv4 127.0.0.1
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", targetPort), 50*time.Millisecond)
+		if err == nil {
+			c.Close()
+			open = true
+		} else {
+			// Check IPv6 [::1]
+			c, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", targetPort), 50*time.Millisecond)
+			if err == nil {
+				c.Close()
+				open = true
 			}
-			go ns.proxyConnection(client, port)
 		}
-	}()
+
+		ns.mu.Lock()
+		defer ns.mu.Unlock()
+
+		if !open {
+			// Cache the failure for a short period
+			ns.negativeCache[targetPort] = time.Now().Add(2 * time.Second)
+			return
+		}
+
+		// Re-check existence under write lock
+		if _, exists := ns.listeners[targetPort]; exists {
+			return
+		}
+
+		addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("0.0.0.0:%d", targetPort))
+		if err != nil {
+			return
+		}
+
+		l, err := ns.net.ListenTCP(addr)
+		if err != nil {
+			return
+		}
+
+		ns.listeners[targetPort] = l
+		log.Printf("JIT Listener active on TCP/%d (Verified host service)", targetPort)
+
+		go func() {
+			for {
+				client, err := l.Accept()
+				if err != nil {
+					return
+				}
+				go ns.proxyConnection(client, targetPort)
+			}
+		}()
+	}(port)
+
+	// Return FALSE to drop the packet while we check
+	return false
 }
 
 func (ns *Netstack) proxyConnection(remote net.Conn, port int) {
@@ -310,14 +340,21 @@ func (ns *Netstack) probeHost(target string) PeerInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 
-	if _, err := ns.Ping(ctx, target); err == nil {
+	if d, err := ns.Ping(ctx, target); err == nil {
 		info.Alive = true
+		info.LatencyMs = d.Milliseconds()
 	}
 
 	ports := []int{22, 80, 443, 3389, 9034}
 	for _, p := range ports {
-		conn, err := ns.DialContext(ctx, "tcp", net.JoinHostPort(target, fmt.Sprintf("%d", p)))
+		start := time.Now()
+		dCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		conn, err := ns.DialContext(dCtx, "tcp", net.JoinHostPort(target, fmt.Sprintf("%d", p)))
+		cancel()
 		if err == nil {
+			if info.LatencyMs == 0 {
+				info.LatencyMs = time.Since(start).Milliseconds()
+			}
 			info.Alive = true
 			switch p {
 			case 22:
@@ -385,11 +422,47 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 		defer conn.Close()
 		conn.SetDeadline(time.Now().Add(2 * time.Second))
 
-		// Send dummy data
-		msg := []byte("WANT")
-		if _, err := conn.Write(msg); err == nil {
-			buf := make([]byte, 64)
+		// Construct ICMP Echo Request (Type 8, Code 0)
+		pkt := make([]byte, 12) // 8 byte header + 4 byte payload
+		pkt[0] = 8              // Type
+		pkt[1] = 0              // Code
+		pkt[2] = 0              // Checksum High
+		pkt[3] = 0              // Checksum Low
+		pkt[4] = 0              // ID High
+		pkt[5] = 1              // ID Low
+		pkt[6] = 0              // Seq High
+		pkt[7] = 1              // Seq Low
+		copy(pkt[8:], []byte("WANT"))
+
+		// Checksum calculation (RFC 1071)
+		var sum uint32
+		for i := 0; i < len(pkt)-1; i += 2 {
+			sum += uint32(pkt[i])<<8 | uint32(pkt[i+1])
+		}
+		if len(pkt)%2 == 1 {
+			sum += uint32(pkt[len(pkt)-1]) << 8
+		}
+		sum = (sum >> 16) + (sum & 0xffff)
+		sum += (sum >> 16)
+		csum := ^uint16(sum)
+		pkt[2] = byte(csum >> 8)
+		pkt[3] = byte(csum)
+
+		if _, err := conn.Write(pkt); err == nil {
+			buf := make([]byte, 1024)
+			// We might receive other ICMP packets (e.g. from other pings), so strictly we should match ID/Seq.
+			// But for a simple probe, just getting *any* packet back from the target is likely the reply.
 			if n, err := conn.Read(buf); err == nil && n >= 0 {
+				// Parse reply type
+				if n >= 1 {
+					typeByte := buf[0]
+					// 0 = Echo Reply. 8 = Echo Request (shouldn't see this). 3 = Dest Unreachable.
+					if typeByte == 0 {
+						return time.Since(start), nil
+					}
+				}
+				// Even if type is not 0 (e.g. 69?), getting a read return means network trip happened.
+				// But let's close enough.
 				return time.Since(start), nil
 			}
 		}
@@ -399,11 +472,11 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 
 	// 2. Fallback: TCP SYN Probing (Accurate RTT because Dial waits for SYN-ACK)
 	// We avoid port 9034 to prevent hitting our own JIT listener if the target is local-ish.
-	ports := []string{"22", "80", "443", "8080"}
+	ports := []string{"80", "443", "22", "3389", "8080", "9034"}
 	for _, p := range ports {
 		pStart := time.Now()
 		// We use a short timeout for each probe
-		ctxT, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		ctxT, cancel := context.WithTimeout(ctx, 1000*time.Millisecond)
 		conn, err = stack.DialContext(ctxT, "tcp", net.JoinHostPort(target, p))
 		cancel()
 		if err == nil {

@@ -525,3 +525,32 @@ func readUint64FromFile(filePath string) (uint64, error) {
 	str := strings.TrimSpace(string(data))
 	return strconv.ParseUint(str, 10, 64)
 }
+func collectCPUUsage() string {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return "0%"
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) > 0 {
+		return fields[0] + " (avg1)"
+	}
+	return "0%"
+}
+
+func collectMemoryTotal() uint64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 1024 * 1024 * 1024
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				val, _ := strconv.ParseUint(fields[1], 10, 64)
+				return val * 1024 // kB to B
+			}
+		}
+	}
+	return 1024 * 1024 * 1024
+}

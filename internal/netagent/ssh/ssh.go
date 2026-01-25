@@ -27,7 +27,36 @@ func Run(ctx context.Context, dial DialContext, user, host, port string) error {
 		authMethods = append(authMethods, ssh.PublicKeysCallback(ssh_agent.NewClient(agentConn).Signers))
 	}
 
-	// 2. Try Keyboard-Interactive / Password by prompting
+	// 2. Try Keyboard-Interactive (common on some distros/devices)
+	keyboardInteractive := ssh.KeyboardInteractive(func(name, instruction string, questions []string, echos []bool) (answers []string, err error) {
+		if len(questions) == 0 {
+			return nil, nil
+		}
+		if instruction != "" {
+			fmt.Println(instruction)
+		}
+		for i, q := range questions {
+			fmt.Print(q)
+			// Decide whether to echo or not based on echos[i] -- usually false for password
+			var ans string
+			if !echos[i] {
+				pass, err := term.ReadPassword(int(os.Stdin.Fd()))
+				if err != nil {
+					return nil, err
+				}
+				ans = string(pass)
+				fmt.Println()
+			} else {
+				// clear text
+				fmt.Scanln(&ans)
+			}
+			answers = append(answers, ans)
+		}
+		return answers, nil
+	})
+	authMethods = append(authMethods, keyboardInteractive)
+
+	// 3. Try Password (legacy)
 	passwordCallback := ssh.PasswordCallback(func() (string, error) {
 		fmt.Printf("%s@%s's password: ", user, host)
 		fd := int(os.Stdin.Fd())

@@ -308,6 +308,36 @@ func getInterfaceStats(name string) (uint64, uint64, error) {
 	return 0, 0, nil
 }
 
+func collectCPUUsage() string {
+	out, err := exec.Command("top", "-l", "1", "-n", "0").Output()
+	if err != nil {
+		return "0%"
+	}
+	// CPU usage: 5.40% user, 6.27% sys, 88.32% idle
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "CPU usage:") {
+			parts := strings.Split(line, ":")
+			if len(parts) > 1 {
+				usageParts := strings.Split(parts[1], ",")
+				if len(usageParts) > 0 {
+					return strings.TrimSpace(usageParts[0]) + " (u)"
+				}
+			}
+		}
+	}
+	return "0%"
+}
+
+func collectMemoryTotal() uint64 {
+	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	if err != nil {
+		return 1024 * 1024 * 1024
+	}
+	size, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
+	return size
+}
+
 // collectMeshStatistics - stub for macOS
 func collectMeshStatistics() *MeshInfo {
 	return nil

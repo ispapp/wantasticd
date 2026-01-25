@@ -21,3 +21,11 @@ func collectMeshStatistics() *MeshInfo {
 func getHostUptime() float64 {
 	return 0
 }
+
+func collectCPUUsage() string {
+	return "0%"
+}
+
+func collectMemoryTotal() uint64 {
+	return 1024 * 1024 * 1024
+}

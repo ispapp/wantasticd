@@ -268,7 +268,15 @@ func printUsage() {
 // Session encapsulates a connection to the network, either via IPC or Ephemeral Agent
 type Session struct {
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	PingFunc    func(ctx context.Context, host string) (time.Duration, error)
 	Close       func()
+}
+
+func (s *Session) Ping(ctx context.Context, host string) (time.Duration, error) {
+	if s.PingFunc != nil {
+		return s.PingFunc(ctx, host)
+	}
+	return 0, fmt.Errorf("ping not supported")
 }
 
 func getSession(ctx context.Context) (*Session, error) {
@@ -284,6 +292,9 @@ func getSession(ctx context.Context) (*Session, error) {
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return ipc.Dial(network, addr)
 			},
+			PingFunc: func(ctx context.Context, host string) (time.Duration, error) {
+				return ipc.Ping(host)
+			},
 			Close: func() {},
 		}, nil
 	}
@@ -298,10 +309,18 @@ func getSession(ctx context.Context) (*Session, error) {
 			if err == nil {
 				if err := agt.Start(ctx); err == nil {
 					// Wait briefly for handshake
-					time.Sleep(2 * time.Second)
+					time.Sleep(1 * time.Second)
+
 					return &Session{
-						DialContext: agt.GetNetstack().DialContext,
-						Close:       func() { agt.Stop() },
+						DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+							return agt.GetNetstack().DialContext(ctx, network, addr)
+						},
+						PingFunc: func(ctx context.Context, host string) (time.Duration, error) {
+							return agt.GetNetstack().Ping(ctx, host)
+						},
+						Close: func() {
+							agt.Stop()
+						},
 					}, nil
 				}
 			}
@@ -534,7 +553,7 @@ func handlePing() {
 	}
 	defer sess.Close()
 
-	if err := ping.Run(ctx, sess.DialContext, host, *count, *interval); err != nil {
+	if err := ping.Run(ctx, sess.DialContext, sess, host, *count, *interval); err != nil {
 		log.Fatalf("Ping failed: %v", err)
 	}
 }
