@@ -6,374 +6,411 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/netip"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"reflect"
+	"unsafe"
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/grpc"
 
-	"golang.zx2c4.com/wireguard/tun/netstack"
+	virtstack "golang.zx2c4.com/wireguard/tun/netstack"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
+// PeerInfo represents a discovered host on the VPN
+type PeerInfo struct {
+	IP       string `json:"ip"`
+	Hostname string `json:"hostname,omitempty"`
+	OS       string `json:"os,omitempty"`
+	Alive    bool   `json:"alive"`
+}
+
+// Netstack handles the userspace networking stack.
+// It is used when the agent runs in rootless mode.
 type Netstack struct {
-	config *config.Config
-	net    *netstack.Net
-	dns    *DNSResolver
-	router *Router
-
-	mu      sync.RWMutex
-	running bool
-	stopCh  chan struct{}
-	socks   net.Listener
-	peers   []string // Discovered peers
-}
-
-func (ns *Netstack) DiscoverPeers() []string {
-	ns.mu.RLock()
-	defer ns.mu.RUnlock()
-	return ns.peers
-}
-
-func (ns *Netstack) runDiscovery(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	// Initial scan
-	ns.scanSubnet()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			ns.scanSubnet()
-		}
-	}
-}
-
-func (ns *Netstack) scanSubnet() {
-	ns.mu.RLock()
-	stack := ns.net
-	ns.mu.RUnlock()
-
-	var activePeers []string
-	if len(ns.config.Interface.Addresses) > 0 {
-		addr := ns.config.Interface.Addresses[0].Addr()
-		base := addr.AsSlice()
-
-		// Map of ports to check (stats and standard services)
-		checkPorts := []int{9034, 22, 80, 443}
-
-		for i := 128; i < 159; i++ {
-			if byte(i) == base[3] {
-				continue
-			}
-			target := net.IPv4(base[0], base[1], base[2], byte(i))
-
-			for _, port := range checkPorts {
-				var err error
-				var conn net.Conn
-
-				if stack != nil {
-					// Use gVisor netstack in userspace mode
-					conn, err = stack.DialTCP(&net.TCPAddr{IP: target, Port: port})
-				} else {
-					// Use OS network stack in System TUN mode
-					conn, err = net.DialTimeout("tcp", net.JoinHostPort(target.String(), strconv.Itoa(port)), 500*time.Millisecond)
-				}
-
-				if err == nil {
-					activePeers = append(activePeers, target.String())
-					conn.Close()
-					break
-				}
-			}
-		}
-	}
-
-	ns.mu.Lock()
-	ns.peers = activePeers
-	ns.mu.Unlock()
-}
-
-type DNSResolver struct {
-	servers []string
-	mu      sync.RWMutex
-}
-
-type Router struct {
-	routes map[string]netip.Prefix
-	mu     sync.RWMutex
+	config    *config.Config
+	net       *virtstack.Net
+	mu        sync.RWMutex
+	listeners map[int]net.Listener
 }
 
 func New(cfg *config.Config) (*Netstack, error) {
 	return &Netstack{
-		config: cfg,
-		dns: &DNSResolver{
-			servers: cfg.Interface.DNS, // Use DNS servers from configuration
-		},
-		router: &Router{
-			routes: make(map[string]netip.Prefix),
-		},
+		config:    cfg,
+		listeners: make(map[int]net.Listener),
 	}, nil
 }
 
-func (ns *Netstack) Start() error {
-	ns.mu.Lock()
-	if ns.running {
-		ns.mu.Unlock()
-		return fmt.Errorf("netstack already running")
+func (ns *Netstack) EnsurePortForward(proto string, port int) {
+	if proto == "icmp" {
+		// ICMP is usually handled internally by gvisor.
+		// Triggering here ensures we don't drop the first ping request if the stack is icy.
+		return
 	}
-	ns.running = true
+
+	if proto != "tcp" {
+		return
+	}
+
+	ns.mu.RLock()
+	if ns.net == nil {
+		ns.mu.RUnlock()
+		return
+	}
+	if _, exists := ns.listeners[port]; exists {
+		ns.mu.RUnlock()
+		return
+	}
+	ns.mu.RUnlock()
+
+	// BE HONEST: Only bind the virtual listener if the local host is actually listening.
+	// We use a very short timeout to avoid delaying real traffic significantly.
+	hostConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 50*time.Millisecond)
+	if err != nil {
+		// Host is not listening (or we couldn't reach it).
+		// We don't bind, allowing the virtual stack to send a RST honestly.
+		return
+	}
+	hostConn.Close()
+
+	ns.mu.Lock()
+	// Re-check existence under write lock
+	if _, exists := ns.listeners[port]; exists {
+		ns.mu.Unlock()
+		return
+	}
+
+	addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		ns.mu.Unlock()
+		return
+	}
+
+	l, err := ns.net.ListenTCP(addr)
+	if err != nil {
+		ns.mu.Unlock()
+		return
+	}
+
+	ns.listeners[port] = l
 	ns.mu.Unlock()
 
+	log.Printf("JIT Listener active on TCP/%d (Verified host service)", port)
+
+	go func() {
+		for {
+			client, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go ns.proxyConnection(client, port)
+		}
+	}()
+}
+
+func (ns *Netstack) proxyConnection(remote net.Conn, port int) {
+	defer remote.Close()
+
+	// Dial local host
+	local, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+	if err != nil {
+		local, err = net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 2*time.Second)
+	}
+
+	if err != nil {
+		log.Printf("JIT Forwarding failed: No local service on port %d", port)
+		return
+	}
+	defer local.Close()
+
+	// Bidirectional copy
+	done := make(chan struct{}, 2)
+	go func() {
+		io.Copy(local, remote)
+		if tc, ok := local.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(remote, local)
+		done <- struct{}{}
+	}()
+
+	<-done
+}
+
+func (ns *Netstack) Start() error {
+	go ns.reaper()
 	return nil
+}
+
+func (ns *Netstack) reaper() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		ns.mu.Lock()
+		for port, l := range ns.listeners {
+			// Check if host port is still alive
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
+			if err != nil {
+				// Host port is gone, close virtual listener
+				log.Printf("Reaping JIT Listener on TCP/%d (Host service unreachable)", port)
+				l.Close()
+				delete(ns.listeners, port)
+			} else {
+				conn.Close()
+			}
+		}
+		ns.mu.Unlock()
+	}
 }
 
 func (ns *Netstack) Stop() error {
 	ns.mu.Lock()
-	if !ns.running {
-		ns.mu.Unlock()
-		return nil
+	defer ns.mu.Unlock()
+	for port, l := range ns.listeners {
+		l.Close()
+		delete(ns.listeners, port)
 	}
-	ns.running = false
-	ns.mu.Unlock()
-
-	// Note: netstack.Net doesn't have a Close() method
-	// The cleanup happens automatically when the device is closed
-
 	return nil
 }
 
-func (ns *Netstack) SetNet(netInst *netstack.Net) {
+func (ns *Netstack) SetNet(netInst *virtstack.Net) {
 	ns.mu.Lock()
 	ns.net = netInst
 	ns.mu.Unlock()
-
-	if netInst == nil {
-		log.Printf("Netstack: System TUN mode. Discovery and stats will use OS stack.")
-	} else {
-		log.Printf("Netstack: Userspace mode. Discovery and stats will use gVisor stack.")
-		// Start SOCKS5 proxy to allow Host -> VPN connectivity
-		go ns.startSOCKS5Proxy()
-	}
-
-	// Start internal mDNS responder for discovery
-	go ns.startMDNSResponder()
-
-	// Start background discovery scan
-	go ns.runDiscovery(context.Background())
-}
-
-func (ns *Netstack) startMDNSResponder() {
-	ns.mu.RLock()
-	stack := ns.net
-	ns.mu.RUnlock()
-
-	// mDNS standard address: 224.0.0.251:5353
-	addr := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
-
-	var conn net.PacketConn
-	var err error
-
-	if stack != nil {
-		conn, err = stack.ListenUDP(addr)
-	} else {
-		// Use OS network stack (might fail if port 5353 is already taken by system mDNS)
-		conn, err = net.ListenMulticastUDP("udp", nil, addr)
-	}
-
-	if err != nil {
-		log.Printf("Netstack: mDNS discovery limited (could not bind 5353): %v", err)
-		return
-	}
-	defer conn.Close()
-
-	log.Printf("Netstack: mDNS discovery active.")
-
-	buf := make([]byte, 2048)
-	for {
-		n, remoteAddr, err := conn.ReadFrom(buf)
-		if err != nil {
-			return
-		}
-
-		// Respond to incoming mDNS queries for "wantastic.local"
-		// For robustness, we'll just track that someone is looking for us
-		ns.handleMDNSQuery(conn, remoteAddr, buf[:n])
+	if netInst != nil {
+		ns.tuneForMacOS(netInst)
+		log.Printf("Internal netstack initialized and tuned for macOS fingerprint.")
 	}
 }
 
-func (ns *Netstack) handleMDNSQuery(conn net.PacketConn, remote net.Addr, data []byte) {
-	// Simple mDNS handling: if we see a Query, we send an unsolicited response
-	// notifying others of our existence.
-	// In a real implementation this would follow RFC 6762.
-
-	// Track the peer as discovered
-	if udpAddr, ok := remote.(*net.UDPAddr); ok {
-		ns.addPeer(udpAddr.IP.String())
+func (ns *Netstack) tuneForMacOS(netInst *virtstack.Net) {
+	// Use reflection to access the unexported 's' (*stack.Stack) in virtstack.Net
+	v := reflect.ValueOf(netInst).Elem()
+	f := v.FieldByName("s")
+	if !f.IsValid() {
+		f = v.FieldByName("Stack")
 	}
+	if !f.IsValid() {
+		return
+	}
+
+	s := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Interface().(*stack.Stack)
+
+	// 1. Set Default TTL to 64 (macOS default)
+	ttl := tcpip.DefaultTTLOption(64)
+	s.SetNetworkProtocolOption(ipv4.ProtocolNumber, &ttl)
+	s.SetNetworkProtocolOption(ipv6.ProtocolNumber, &ttl)
+
+	// 2. Set TCP Options to look like macOS
+	opt := tcpip.TCPReceiveBufferSizeRangeOption{
+		Min:     4096,
+		Default: 65535,
+		Max:     4194304,
+	}
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &opt)
+
+	sack := tcpip.TCPSACKEnabled(true)
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sack)
+
+	// 3. Add default routes via NIC 1 (created by virtstack)
+	// Without routes, DialContext returns "no ports are available"
+	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom4([4]byte{0, 0, 0, 0}), tcpip.MaskFrom("\x00\x00\x00\x00"))
+	ipv6Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16([16]byte{}), tcpip.MaskFrom(strings.Repeat("\x00", 16)))
+
+	s.SetRouteTable([]tcpip.Route{
+		{
+			Destination: ipv4Subnet,
+			NIC:         1,
+		},
+		{
+			Destination: ipv6Subnet,
+			NIC:         1,
+		},
+	})
 }
 
-func (ns *Netstack) addPeer(ip string) {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
-	for _, p := range ns.peers {
-		if p == ip {
-			return
-		}
-	}
-	ns.peers = append(ns.peers, ip)
+func (ns *Netstack) UpdateNetworkConfig(config *grpc.NetworkConfiguration) error {
+	return nil
 }
 
-func (ns *Netstack) startSOCKS5Proxy() {
-	// Tailscale typically uses port 1055 for its proxy
-	l, err := net.Listen("tcp", "127.0.0.1:1055")
-	if err != nil {
-		log.Printf("Netstack: Failed to start SOCKS5 proxy on :1055: %v", err)
-		return
-	}
-
-	ns.mu.Lock()
-	ns.socks = l
-	ns.mu.Unlock()
-
-	log.Printf("Netstack: SOCKS5 proxy listening on 127.0.0.1:1055. Use this to reach peers from the host.")
-
-	for {
-		client, err := l.Accept()
-		if err != nil {
-			return
-		}
-		go ns.handleSOCKS5(client)
-	}
-}
-
-func (ns *Netstack) handleSOCKS5(client net.Conn) {
-	defer client.Close()
-
-	// Simple SOCKS5 handshake (minimal implementation for robustness)
-	buf := make([]byte, 256)
-	if _, err := io.ReadFull(client, buf[:2]); err != nil || buf[0] != 0x05 {
-		return
-	}
-
-	nMethods := int(buf[1])
-	if _, err := io.ReadFull(client, buf[:nMethods]); err != nil {
-		return
-	}
-
-	// No auth required
-	client.Write([]byte{0x05, 0x00})
-
-	// Request
-	if _, err := io.ReadFull(client, buf[:4]); err != nil || buf[1] != 0x01 {
-		return
-	}
-
-	var targetIP net.IP
-	switch buf[3] {
-	case 0x01: // IPv4
-		if _, err := io.ReadFull(client, buf[:4]); err != nil {
-			return
-		}
-		targetIP = net.IP(buf[:4])
-	case 0x03: // Domain
-		if _, err := io.ReadFull(client, buf[:1]); err != nil {
-			return
-		}
-		len := int(buf[0])
-		if _, err := io.ReadFull(client, buf[:len]); err != nil {
-			return
-		}
-		// In a real implementation we'd resolve it, for now we assume IP
-		return
-	default:
-		return
-	}
-
-	if _, err := io.ReadFull(client, buf[:2]); err != nil {
-		return
-	}
-	port := int(buf[0])<<8 | int(buf[1])
-
-	// Connect through netstack
+func (ns *Netstack) DiscoverPeersDetail() []PeerInfo {
 	ns.mu.RLock()
 	stack := ns.net
 	ns.mu.RUnlock()
 
 	if stack == nil {
-		client.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
+		return nil
 	}
 
-	destAddr := &net.TCPAddr{IP: targetIP, Port: port}
-	dest, err := stack.DialTCP(destAddr)
-	if err != nil {
-		client.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
+	subnets := ns.config.Server.AllowedIPs
+	if len(subnets) == 0 {
+		return nil
 	}
-	defer dest.Close()
 
-	client.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	var results []PeerInfo
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(dest, client); done <- struct{}{} }()
-	go func() { io.Copy(client, dest); done <- struct{}{} }()
-	<-done
-}
+	sem := make(chan struct{}, 50)
 
-func (ns *Netstack) GetRoutes() []string {
-	ns.router.mu.RLock()
-	defer ns.router.mu.RUnlock()
-
-	routes := make([]string, 0, len(ns.router.routes))
-	for route := range ns.router.routes {
-		routes = append(routes, route)
-	}
-	return routes
-}
-
-func (ns *Netstack) AddRoute(prefix netip.Prefix) error {
-	ns.router.mu.Lock()
-	defer ns.router.mu.Unlock()
-
-	ns.router.routes[prefix.String()] = prefix
-	log.Printf("Added route: %s", prefix.String())
-	return nil
-}
-
-func (ns *Netstack) RemoveRoute(prefix netip.Prefix) error {
-	ns.router.mu.Lock()
-	defer ns.router.mu.Unlock()
-
-	delete(ns.router.routes, prefix.String())
-	log.Printf("Removed route: %s", prefix.String())
-	return nil
-}
-
-func (ns *Netstack) UpdateNetworkConfig(config *grpc.NetworkConfiguration) error {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
-	log.Printf("Updating network configuration: routes=%v, forwarding_rules=%v",
-		config.Routes, config.ForwardingRules)
-
-	ns.router.mu.Lock()
-	ns.router.routes = make(map[string]netip.Prefix)
-	for _, route := range config.Routes {
-		prefix, err := netip.ParsePrefix(route)
-		if err != nil {
-			ns.router.mu.Unlock()
-			return fmt.Errorf("parse route %s: %w", route, err)
+	for _, sub := range subnets {
+		if strings.Contains(sub, ":") {
+			continue
 		}
-		ns.router.routes[prefix.String()] = prefix
-	}
-	ns.router.mu.Unlock()
 
-	log.Println("Network configuration updated successfully")
-	return nil
+		ip, ipNet, err := net.ParseCIDR(sub)
+		if err != nil {
+			continue
+		}
+
+		mask, _ := ipNet.Mask.Size()
+		if mask < 22 {
+			continue
+		}
+
+		base := ip.To4()
+		for i := 1; i < 255; i++ {
+			target := net.IPv4(base[0], base[1], base[2], byte(i))
+			if !ipNet.Contains(target) {
+				continue
+			}
+
+			wg.Add(1)
+			go func(t net.IP) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				info := ns.probeHost(t.String())
+				if info.Alive {
+					mu.Lock()
+					results = append(results, info)
+					mu.Unlock()
+				}
+			}(target)
+		}
+	}
+
+	wg.Wait()
+	return results
+}
+
+func (ns *Netstack) probeHost(target string) PeerInfo {
+	info := PeerInfo{IP: target}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	if _, err := ns.Ping(ctx, target); err == nil {
+		info.Alive = true
+	}
+
+	ports := []int{22, 80, 443, 3389, 9034}
+	for _, p := range ports {
+		conn, err := ns.DialContext(ctx, "tcp", net.JoinHostPort(target, fmt.Sprintf("%d", p)))
+		if err == nil {
+			info.Alive = true
+			switch p {
+			case 22:
+				conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+				buf := make([]byte, 100)
+				if n, err := conn.Read(buf); err == nil {
+					banner := string(buf[:n])
+					if strings.Contains(banner, "Ubuntu") || strings.Contains(banner, "Debian") {
+						info.OS = "Linux (Ubuntu/Debian)"
+					} else if strings.Contains(banner, "OpenSSH") {
+						info.OS = "Linux/macOS"
+					}
+				}
+			case 3389:
+				info.OS = "Windows (RDP)"
+			case 9034:
+				info.Hostname = "Wantastic Agent"
+			}
+			conn.Close()
+			if info.OS != "" {
+				break
+			}
+		}
+	}
+	return info
+}
+
+func (ns *Netstack) DiscoverPeers() []string {
+	details := ns.DiscoverPeersDetail()
+	var ips []string
+	for _, d := range details {
+		ips = append(ips, d.IP)
+	}
+	return ips
+}
+
+func (ns *Netstack) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	ns.mu.RLock()
+	stack := ns.net
+	ns.mu.RUnlock()
+
+	if stack == nil {
+		return nil, net.ErrClosed
+	}
+	return stack.DialContext(ctx, network, addr)
+}
+
+func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, error) {
+	ns.mu.RLock()
+	stack := ns.net
+	ns.mu.RUnlock()
+
+	if stack == nil {
+		log.Printf("Ping Error: Netstack not initialized")
+		return 0, net.ErrClosed
+	}
+
+	start := time.Now()
+
+	// 1. Try Real ICMP Ping (gvisor protocol "ping")
+	// For "ping" network, Dial returns a connection that behaves like a datagram socket.
+	// We MUST write an ICMP packet and read the reply to measure RTT.
+	conn, err := stack.DialContext(ctx, "ping", target)
+	if err == nil {
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+		// Send dummy data
+		msg := []byte("WANT")
+		if _, err := conn.Write(msg); err == nil {
+			buf := make([]byte, 64)
+			if n, err := conn.Read(buf); err == nil && n >= 0 {
+				return time.Since(start), nil
+			}
+		}
+		// Reset start if ICMP write/read failed but connect succeeded
+		start = time.Now()
+	}
+
+	// 2. Fallback: TCP SYN Probing (Accurate RTT because Dial waits for SYN-ACK)
+	// We avoid port 9034 to prevent hitting our own JIT listener if the target is local-ish.
+	ports := []string{"22", "80", "443", "8080"}
+	for _, p := range ports {
+		pStart := time.Now()
+		// We use a short timeout for each probe
+		ctxT, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		conn, err = stack.DialContext(ctxT, "tcp", net.JoinHostPort(target, p))
+		cancel()
+		if err == nil {
+			conn.Close()
+			return time.Since(pStart), nil
+		}
+	}
+
+	return 0, fmt.Errorf("ping failed")
 }

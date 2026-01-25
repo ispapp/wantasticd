@@ -58,7 +58,7 @@ jobs:
         mkdir -p r2_upload
         cp wantasticd-${{ matrix.goarch }}.tar.gz r2_upload/
 
-    - name: Upload to R2
+    - name: Upload to R2 (Versioned)
       uses: ryand56/r2-upload-action@latest
       with:
         r2-account-id: ${{ secrets.R2_ACCOUNT }}
@@ -67,3 +67,32 @@ jobs:
         r2-bucket: ${{ secrets.R2_BUCKET }}
         source-dir: r2_upload
         destination-dir: ${{ github.ref_name }}
+
+    - name: Upload to R2 (Latest)
+      uses: ryand56/r2-upload-action@latest
+      with:
+        r2-account-id: ${{ secrets.R2_ACCOUNT }}
+        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY }}
+        r2-secret-access-key: ${{ secrets.R2_SECRET }}
+        r2-bucket: ${{ secrets.R2_BUCKET }}
+        source-dir: r2_upload
+        destination-dir: latest
+
+  upload-utils:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Prepare Root Upload
+      run: |
+        mkdir -p root_upload
+        cp install.sh root_upload/
+    - name: Upload Install Script to R2 Root
+      uses: ryand56/r2-upload-action@latest
+      with:
+        r2-account-id: ${{ secrets.R2_ACCOUNT }}
+        r2-access-key-id: ${{ secrets.R2_ACCESS_KEY }}
+        r2-secret-access-key: ${{ secrets.R2_SECRET }}
+        r2-bucket: ${{ secrets.R2_BUCKET }}
+        source-dir: root_upload
+        destination-dir: ./

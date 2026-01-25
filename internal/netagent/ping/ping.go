@@ -1,0 +1,131 @@
+package ping
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+type DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+type Stats struct {
+	Sent     int
+	Received int
+	MinRTT   time.Duration
+	MaxRTT   time.Duration
+	TotalRTT time.Duration
+}
+
+func Run(ctx context.Context, dial DialContext, host string, count int, interval time.Duration) error {
+	fmt.Printf("PING %s (%s): via wantasticd netstack\n", host, host)
+
+	stats := &Stats{
+		MinRTT: 1 * time.Hour,
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	probe := func(seq int) {
+		stats.Sent++
+
+		// Attempt ICMP via dialer (daemon should handle "ping" protocol)
+		// Or fallback to TCP SYN if "ping" fails
+		var rtt time.Duration
+		err := tryPing(ctx, dial, host, &rtt)
+
+		if err != nil {
+			fmt.Printf("Request timeout for seq %d\n", seq)
+		} else {
+			stats.Received++
+			stats.TotalRTT += rtt
+			if rtt < stats.MinRTT {
+				stats.MinRTT = rtt
+			}
+			if rtt > stats.MaxRTT {
+				stats.MaxRTT = rtt
+			}
+			fmt.Printf("64 bytes from %s: icmp_seq=%d time=%.3f ms\n", host, seq, float64(rtt.Nanoseconds())/1e6)
+		}
+	}
+
+	seq := 1
+	for {
+		probe(seq)
+		if count > 0 && seq >= count {
+			break
+		}
+		seq++
+
+		select {
+		case <-sigCh:
+			printStats(host, stats)
+			return nil
+		case <-ticker.C:
+		case <-ctx.Done():
+			printStats(host, stats)
+			return ctx.Err()
+		}
+	}
+
+	printStats(host, stats)
+	return nil
+}
+
+func tryPing(ctx context.Context, dial DialContext, host string, rtt *time.Duration) error {
+	start := time.Now()
+	// 1. Try ICMP "ping" protocol (gvisor specific)
+	ctxPing, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	conn, err := dial(ctxPing, "ping", host)
+	if err == nil {
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		msg := []byte("WANT")
+		if _, err := conn.Write(msg); err == nil {
+			buf := make([]byte, 64)
+			if n, err := conn.Read(buf); err == nil && n >= 0 {
+				*rtt = time.Since(start)
+				return nil
+			}
+		}
+	}
+
+	// 2. Fallback: TCP SYN on port 22
+	// We use 22 because it's standard and likely to respond with RST or SYN-ACK
+	ctxTCP, cancelTCP := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancelTCP()
+
+	conn, err = dial(ctxTCP, "tcp", net.JoinHostPort(host, "22"))
+	if err == nil {
+		conn.Close()
+		*rtt = time.Since(start)
+		return nil
+	}
+
+	return err
+}
+
+func printStats(host string, s *Stats) {
+	fmt.Printf("\n--- %s ping statistics ---\n", host)
+	loss := 0.0
+	if s.Sent > 0 {
+		loss = float64(s.Sent-s.Received) / float64(s.Sent) * 100
+	}
+	fmt.Printf("%d packets transmitted, %d packets received, %.1f%% packet loss\n", s.Sent, s.Received, loss)
+	if s.Received > 0 {
+		avg := s.TotalRTT / time.Duration(s.Received)
+		fmt.Printf("round-trip min/avg/max = %.3f/%.3f/%.3f ms\n",
+			float64(s.MinRTT.Nanoseconds())/1e6,
+			float64(avg.Nanoseconds())/1e6,
+			float64(s.MaxRTT.Nanoseconds())/1e6)
+	}
+}

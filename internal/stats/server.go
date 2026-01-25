@@ -19,7 +19,7 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-//go:embed view.tmpl
+//go:embed view.tmpl htmx.min.js dashboard.js
 var viewsFS embed.FS
 
 // Server provides metrics and statistics about the device
@@ -67,9 +67,10 @@ type Metrics struct {
 
 	// WireGuard device metrics
 	WireGuard struct {
-		Connected  bool   `json:"connected"`
-		PublicKey  string `json:"public_key"`
-		Peers      int    `json:"peers"`
+		Connected  bool     `json:"connected"`
+		PublicKey  string   `json:"public_key"`
+		Peers      int      `json:"peers"`
+		PeersList  []string `json:"peers_list"`
 		Throughput struct {
 			TxBytes uint64 `json:"tx_bytes"`
 			RxBytes uint64 `json:"rx_bytes"`
@@ -169,7 +170,18 @@ func NewServer(device *device.Device, ns *agent_netstack.Netstack, version strin
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/view", s.handleView)
+	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/peers", s.handlePeers)
+	mux.HandleFunc("/lib/htmx.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		data, _ := viewsFS.ReadFile("htmx.min.js")
+		w.Write(data)
+	})
+	mux.HandleFunc("/lib/dashboard.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		data, _ := viewsFS.ReadFile("dashboard.js")
+		w.Write(data)
+	})
 	mux.HandleFunc("/", s.handleRoot)
 
 	s.server = &http.Server{
@@ -220,9 +232,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePeers returns a list of discovered peers
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
-	peers := s.netstack.DiscoverPeers()
+	peers := s.netstack.DiscoverPeersDetail()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -242,12 +253,47 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleEvents streams device metrics via Server-Sent Events (SSE)
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	// Set headers for SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Create a channel to handle client disconnection
+	clientGone := r.Context().Done()
+
+	rc := http.NewResponseController(w)
+
+	// Send initial data immediately
+	metrics := s.collectMetrics()
+	if data, err := json.Marshal(metrics); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		rc.Flush()
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-clientGone:
+			return
+		case <-ticker.C:
+			metrics := s.collectMetrics()
+			data, err := json.Marshal(metrics)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			rc.Flush()
+		}
+	}
+}
+
 // handleView returns a beautiful HTML view of device statistics using Windows 11 design
 func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
-	metrics := s.collectMetrics()
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
 	// Parse and execute the template
 	tmpl, err := template.New("view.tmpl").Funcs(template.FuncMap{
 		"div": func(a, b any) float64 {
@@ -278,6 +324,8 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Initial render
+	metrics := s.collectMetrics()
 	if err := tmpl.Execute(w, metrics); err != nil {
 		log.Printf("Error executing template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -304,7 +352,7 @@ func (s *Server) collectMetrics() Metrics {
 	var m Metrics
 	m.Timestamp = time.Now()
 	m.Hostname, _ = os.Hostname()
-	m.Platform = runtime.GOOS
+	m.Platform = "darwin"
 
 	// System metrics
 	m.CPU.Cores = runtime.NumCPU()
@@ -337,18 +385,20 @@ func (s *Server) collectMetrics() Metrics {
 	}
 
 	// WireGuard metrics (would use actual device stats)
-	m.WireGuard.Connected = true
+	m.WireGuard.Connected = s.device.HasActiveHandshake()
 	m.WireGuard.PublicKey = s.device.GetPublicKey()
 
 	// Try to get peers from netstack if available
-	m.WireGuard.Peers = len(s.netstack.DiscoverPeers())
+	peers := s.netstack.DiscoverPeers()
+	m.WireGuard.Peers = len(peers)
+	m.WireGuard.PeersList = peers
 
 	m.WireGuard.Throughput.TxBytes = 1024 * 1024     // 1MB
 	m.WireGuard.Throughput.RxBytes = 2 * 1024 * 1024 // 2MB
 
 	// Agent metrics
 	// Agent metrics (Host Uptime)
-	m.Agent.Uptime = fmt.Sprintf("%.0fs", getHostUptime())
+	m.Agent.Uptime = formatUptimeDuration(getHostUptime())
 	m.Agent.Version = "1.0.0"
 	m.Agent.Status = "running"
 
@@ -356,6 +406,21 @@ func (s *Server) collectMetrics() Metrics {
 	m.Mesh = collectMeshStatistics()
 
 	return m
+}
+
+func formatUptimeDuration(seconds float64) string {
+	d := time.Duration(seconds) * time.Second
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 // getCPUInfo returns basic CPU information

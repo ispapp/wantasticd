@@ -12,6 +12,7 @@ import (
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/device"
 	"wantastic-agent/internal/grpc"
+	"wantastic-agent/internal/ipc"
 	"wantastic-agent/internal/netstack"
 )
 
@@ -21,6 +22,7 @@ type Agent struct {
 	device   *device.Device
 	client   *grpc.Client
 	netstack *netstack.Netstack
+	ipc      *ipc.Server
 	updater  *update.Manager
 	stats    *stats.Server
 
@@ -55,15 +57,21 @@ func NewWithClient(cfg *config.Config, client *grpc.Client) (*Agent, error) {
 		return nil, fmt.Errorf("create netstack: %w", err)
 	}
 
+	// Hook up JIT Port Forwarding
+	dev.PortForwarder = ns.EnsurePortForward
+
 	updater := update.NewManager("1.0.0") // TODO: Get version from build
 
 	// Initialize stats server
 	statsServer := stats.NewServer(dev, ns, "1.0.0")
 
+	ipcServer := ipc.NewServer(ns)
+
 	return &Agent{
 		config:   cfg,
 		device:   dev,
 		netstack: ns,
+		ipc:      ipcServer,
 		updater:  updater,
 		stats:    statsServer,
 		client:   client, // Store the pre-configured client
@@ -110,18 +118,20 @@ func (a *Agent) Start(ctx context.Context) error {
 	if err := a.device.Start(); err != nil {
 		return fmt.Errorf("start device: %w", err)
 	}
-
 	// Link the userspace netstack from the device to the netstack manager
 	a.netstack.SetNet(a.device.GetNetstack())
-
 	// Start stats server
 	if err := a.stats.Start(); err != nil {
 		log.Printf("Warning: failed to start stats server: %v", err)
 	}
-
 	if err := a.netstack.Start(); err != nil {
 		a.device.Stop()
 		return fmt.Errorf("start netstack: %w", err)
+	}
+
+	// Start IPC server for subcommands
+	if err := a.ipc.Start(); err != nil {
+		log.Printf("Warning: failed to start IPC server: %v", err)
 	}
 
 	if a.client != nil {
@@ -173,6 +183,10 @@ func (a *Agent) Stop() error {
 	a.mu.Unlock()
 
 	a.wg.Wait()
+
+	if a.ipc != nil {
+		a.ipc.Stop()
+	}
 
 	if err := a.netstack.Stop(); err != nil {
 		log.Printf("Error stopping netstack: %v", err)
@@ -298,4 +312,8 @@ func (a *Agent) IsRunning() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.running
+}
+
+func (a *Agent) GetNetstack() *netstack.Netstack {
+	return a.netstack
 }

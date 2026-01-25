@@ -6,9 +6,9 @@ set -e
 
 # Configuration
 BINARY_PATH="/bin/wantasticd"
-BASE_URL="https://wantasticd.wantastic.app"
+BASE_URL="https://get.wantastic.app"
 LATEST_VERSION_URL="${BASE_URL}/latest"
-
+CURRENT_VERSION_URL="$(/bin/wantasticd version | cut -d ' ' -f 2)"
 # Detect architecture
 detect_arch() {
     local arch_raw=$(uname -m)
@@ -43,6 +43,11 @@ main() {
     else
         echo "Fetching latest version from ${LATEST_VERSION_URL}..."
         VERSION=$(curl -sSL "${LATEST_VERSION_URL}" | tr -d '[:space:]')
+        # Compare versions to decide if we going to update or not
+        if [ "$VERSION" = "$CURRENT_VERSION_URL" ]; then
+            echo "Already on latest version: $VERSION"
+            exit 0
+        fi
         if [ -z "$VERSION" ]; then
             echo "Error: Could not determine latest version"
             exit 1
