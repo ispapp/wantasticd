@@ -37,7 +37,7 @@ func (m *Manager) GetCurrentVersion() string {
 
 // FetchLatestVersion gets the latest version as text from the /latest endpoint
 func (m *Manager) FetchLatestVersion(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://wantasticd.wantastic.app/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://get.wantastic.app/latest", nil)
 	if err != nil {
 		return "", err
 	}
@@ -139,6 +139,6 @@ func GetPlatform() string {
 
 // BuildUpdateURL constructs an update URL for the given version and architecture
 func BuildUpdateURL(baseURL, version, arch string) string {
-	// Pattern: https://wantasticd.wantastic.app/${version}/wantasticd-${arch}.tar.gz
+	// Pattern: https://get.wantastic.app/${version}/wantasticd-${arch}.tar.gz
 	return fmt.Sprintf("%s/%s/wantasticd-%s.tar.gz", baseURL, version, arch)
 }

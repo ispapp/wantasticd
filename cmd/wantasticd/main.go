@@ -43,8 +43,6 @@ func main() {
 		handleConnect()
 	case "update":
 		handleUpdate()
-	case "peers":
-		handlePeers()
 	case "version":
 		printVersion()
 	case "ping":
@@ -59,8 +57,6 @@ func main() {
 		handleBind()
 	case "neighbors":
 		handleNeighbors()
-	case "proxy":
-		handleProxy()
 	default:
 		printUsage()
 		os.Exit(1)
@@ -255,7 +251,6 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  login      Authenticate and configure the agent")
 	fmt.Fprintln(os.Stderr, "  connect    Connect the agent using a configuration file")
 	fmt.Fprintln(os.Stderr, "  update     Self-update the agent to the latest version")
-	fmt.Fprintln(os.Stderr, "  peers      List discovered peers in the subnet")
 	fmt.Fprintln(os.Stderr, "  ping       Ping a host (TCP probe) via the agent network")
 	fmt.Fprintln(os.Stderr, "  curl       Run curl via the agent network")
 	fmt.Fprintln(os.Stderr, "  ssh        Run ssh via the agent network")
@@ -328,36 +323,6 @@ func getSession(ctx context.Context) (*Session, error) {
 	}
 
 	return nil, fmt.Errorf("daemon not running at %s and no %s found for ephemeral session", socketPath, configPath)
-}
-
-func handleProxy() {
-	if len(os.Args) < 4 {
-		os.Exit(1)
-	}
-	targetHost := os.Args[2]
-	targetPort := os.Args[3]
-	target := net.JoinHostPort(targetHost, targetPort)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sess, err := getSession(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	defer sess.Close()
-
-	conn, err := sess.DialContext(ctx, "tcp", target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Proxy connection failed: %v", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-
-	// Pipe io
-	go io.Copy(os.Stdout, conn)
-	io.Copy(conn, os.Stdin)
 }
 
 func handleNeighbors() {
