@@ -18,40 +18,33 @@ type Result struct {
 }
 
 func RunPortScan(ctx context.Context, dial DialContext, targetIP string) error {
-	fmt.Printf("Starting professional port scan on %s via VPN...\n", targetIP)
-
-	// High priority ports
-	common := []int{21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 1055, 1723, 3000, 3306, 3389, 5432, 5900, 6379, 8000, 8080, 8443, 9034}
-
-	uniquePorts := make(map[int]bool)
-	for _, p := range common {
-		uniquePorts[p] = true
-	}
-	for i := 1; i <= 1024; i++ {
-		uniquePorts[i] = true
-	}
+	fmt.Printf("Starting advanced TCP Port Scan on %s (1-65535)...\n", targetIP)
+	start := time.Now()
 
 	results := make(chan Result)
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 128)
+	// Concurrency: 1024 workers
+	sem := make(chan struct{}, 1024)
 
+	// Scan 1 - 65535
 	go func() {
-		for port := range uniquePorts {
+		for p := 1; p <= 65535; p++ {
 			wg.Add(1)
-			go func(p int) {
+			go func(port int) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				dCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				conn, err := dial(dCtx, "tcp", net.JoinHostPort(targetIP, fmt.Sprintf("%d", p)))
-				cancel()
+				// 800ms timeout - fast enough for LAN/VPN
+				dCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+				defer cancel()
+				conn, err := dial(dCtx, "tcp", net.JoinHostPort(targetIP, fmt.Sprintf("%d", port)))
 				if err == nil {
-					svc := GetServiceHint(p)
-					results <- Result{Port: p, State: "open", Service: svc}
+					svc := GetServiceHint(port)
+					results <- Result{Port: port, State: "open", Service: svc}
 					conn.Close()
 				}
-			}(port)
+			}(p)
 		}
 		wg.Wait()
 		close(results)
@@ -74,9 +67,16 @@ func RunPortScan(ctx context.Context, dial DialContext, targetIP string) error {
 		}
 	}
 
-	for _, r := range found {
-		fmt.Printf("%-10d %-10s %-20s\n", r.Port, r.State, r.Service)
+	if len(found) == 0 {
+		fmt.Println("No open ports found (all 65535 scanned). Host might be down or fully filtered.")
+	} else {
+		for _, r := range found {
+			fmt.Printf("%-10d %-10s %-20s\n", r.Port, r.State, r.Service)
+		}
 	}
+
+	duration := time.Since(start)
+	fmt.Printf("\nScan completed in %.2fs\n", duration.Seconds())
 	return nil
 }
 
