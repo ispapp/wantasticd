@@ -33,7 +33,19 @@ case "$ARCH_RAW" in
 esac
 
 # Find current binary path
-BINARY_PATH=$(command -v wantasticd || echo "/usr/local/bin/wantasticd")
+# Find current binary path
+if command -v wantasticd >/dev/null 2>&1; then
+    BINARY_PATH=$(command -v wantasticd)
+else
+    # Fallback if not found in PATH
+    if [ -d "/usr/local/bin" ]; then
+        BINARY_PATH="/usr/local/bin/wantasticd"
+    elif [ -d "/bin" ]; then
+        BINARY_PATH="/bin/wantasticd"
+    else
+        BINARY_PATH="/usr/bin/wantasticd"
+    fi
+fi
 
 # Main update logic
 main() {
@@ -84,14 +96,20 @@ main() {
 
     echo "Applying update to ${BINARY_PATH}..."
     
-    # Needs sudo if not writeable by current user
-    if [ ! -w "$(dirname "${BINARY_PATH}")" ] || ([ -f "${BINARY_PATH}" ] && [ ! -w "${BINARY_PATH}" ]); then
-        echo "Elevation required for installation..."
-        sudo mv "${NEW_BINARY}" "${BINARY_PATH}"
-        sudo chmod +x "${BINARY_PATH}"
-    else
+    # Determine if we need elevated permissions for the TARGET directory
+    TARGET_DIR=$(dirname "${BINARY_PATH}")
+    
+    if [ -w "${TARGET_DIR}" ] && ( [ ! -f "${BINARY_PATH}" ] || [ -w "${BINARY_PATH}" ] ); then
         mv "${NEW_BINARY}" "${BINARY_PATH}"
         chmod +x "${BINARY_PATH}"
+    else
+        echo "Elevation required for installation..."
+        if ! command -v sudo >/dev/null 2>&1; then
+             echo "Error: ${TARGET_DIR} is not writable and 'sudo' is not available."
+             exit 1
+        fi
+        sudo mv "${NEW_BINARY}" "${BINARY_PATH}"
+        sudo chmod +x "${BINARY_PATH}"
     fi
 
     echo "Successfully updated to ${VERSION}!"

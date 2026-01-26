@@ -87,15 +87,34 @@ if [ -z "$EXTRACTED_BIN" ]; then
 fi
 
 # 4. Install
-INSTALL_PATH="/usr/local/bin/wantasticd"
+# Determine install directory
+# Priority: /usr/local/bin -> /bin -> /usr/bin
+if [ -d "/usr/local/bin" ] && echo "$PATH" | grep -q "/usr/local/bin"; then
+    INSTALL_DIR="/usr/local/bin"
+elif [ -d "/bin" ]; then
+    INSTALL_DIR="/bin"
+elif [ -d "/usr/bin" ]; then
+    INSTALL_DIR="/usr/bin"
+else
+    echo "Error: Could not find a suitable installation directory in PATH."
+    exit 1
+fi
+
+INSTALL_PATH="${INSTALL_DIR}/wantasticd"
 echo "Installing to $INSTALL_PATH..."
 
-if [ "$(id -u)" -ne 0 ]; then
-    sudo mv "$EXTRACTED_BIN" "$INSTALL_PATH"
-    sudo chmod +x "$INSTALL_PATH"
-else
+# Move binary
+if [ -w "$INSTALL_DIR" ]; then
     mv "$EXTRACTED_BIN" "$INSTALL_PATH"
     chmod +x "$INSTALL_PATH"
+else
+    echo "Elevation required..."
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Error: Directory $INSTALL_DIR is not writable and 'sudo' is not available."
+        exit 1
+    fi
+    sudo mv "$EXTRACTED_BIN" "$INSTALL_PATH"
+    sudo chmod +x "$INSTALL_PATH"
 fi
 
 # Cleanup
