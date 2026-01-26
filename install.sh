@@ -7,7 +7,14 @@ set -e
 BASE_URL="https://get.wantastic.app"
 
 # Detect OS
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+# Use case statement instead of tr to avoid potential locale/environment issues (fixing "Linlx")
+UNAME_S="$(uname -s)"
+case "$UNAME_S" in
+    Linux*)     OS="linux" ;;
+    Darwin*)    OS="darwin" ;;
+    *)          echo "Unsupported Operating System: $UNAME_S"; exit 1 ;;
+esac
+
 ARCH="$(uname -m)"
 
 # Normalize Arch
@@ -35,7 +42,7 @@ fi
 echo "Detected Platform: $OS-$ARCH"
 
 # 1. Fetch Latest Version
-echo "checking for latest version..."
+echo "Checking for latest version..."
 VERSION=$(curl -sSL "${BASE_URL}/latest")
 
 if [ -z "$VERSION" ]; then
@@ -46,8 +53,9 @@ fi
 echo "Latest version: $VERSION"
 
 # 2. Construct Download URL
-# Structure: https://get.wantastic.app/<version>/wantasticd-<os>-<arch>.tar.gz
-BINARY_URL="${BASE_URL}/${VERSION}/wantasticd-${OS}-${ARCH}.tar.gz"
+# Structure: https://get.wantastic.app/latest/wantasticd-<os>-<arch>.tar.gz
+# We use 'latest' path directly as requested
+BINARY_URL="${BASE_URL}/latest/wantasticd-${OS}-${ARCH}.tar.gz"
 
 # Create temp directory
 TMP_DIR=$(mktemp -d)
@@ -68,20 +76,14 @@ echo "Extracting..."
 tar -xzf wantasticd.tar.gz
 
 # Find the binary inside the extracted folder
-# The tarball might contain ./wantasticd-<arch> or just the binary. 
-# Based on existing build: BINARY_NAME="wantasticd-${GOARCH}"
-# But we are renaming it to strictly 'wantasticd' for installation.
-EXTRACTED_BIN="wantasticd-${ARCH}"
+# The archive should contain a binary named 'wantasticd' (renamed during packaging)
+# But we iterate to be safe if it's in a subdir
+EXTRACTED_BIN=$(find . -type f -name "wantasticd" | head -n 1)
 
-if [ ! -f "$EXTRACTED_BIN" ]; then
-    # Fallback to check if it's just named 'wantasticd' or in a subdir
-    if [ -f "wantasticd" ]; then
-        EXTRACTED_BIN="wantasticd"
-    else
-        echo "Error: Could not find binary in archive."
-        ls -la
-        exit 1
-    fi
+if [ -z "$EXTRACTED_BIN" ]; then
+    echo "Error: Could not find 'wantasticd' binary in archive."
+    ls -la
+    exit 1
 fi
 
 # 4. Install
@@ -101,4 +103,20 @@ cd /
 rm -rf "$TMP_DIR"
 
 echo "Success! Wantasticd ($VERSION) installed to $INSTALL_PATH"
-echo "Run 'wantasticd --help' to get started."
+
+# 5. Login & Connect Flow
+echo ""
+echo "=== Initialization ==="
+TOKEN="$1"
+
+if [ -n "$TOKEN" ]; then
+    echo "Token provided. Attempting instant login and connection..."
+    # Run login with token. This command will authenticate, save config, AND start the agent (blocking).
+    "$INSTALL_PATH" login -token "$TOKEN"
+else
+    echo "No token provided."
+    echo "Starting interactive login..."
+    # Run interactive login. This will print the auth URL, wait for flow completion, save config, AND start the agent (blocking).
+    "$INSTALL_PATH" login
+fi
+

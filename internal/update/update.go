@@ -139,7 +139,7 @@ func GetPlatform() string {
 
 // BuildUpdateURL constructs an update URL for the given version and platform
 func BuildUpdateURL(baseURL, version, platform string) string {
-	// Pattern: https://get.wantastic.app/${version}/wantasticd-${platform}.tar.gz
-	// platform is expected to be eg: linux-amd64 or darwin-arm64
-	return fmt.Sprintf("%s/%s/wantasticd-%s.tar.gz", baseURL, version, platform)
+	// Pattern: https://get.wantastic.app/latest/wantasticd-${platform}.tar.gz
+	// We ignore the version in the URL path and use 'latest' directly
+	return fmt.Sprintf("%s/latest/wantasticd-%s.tar.gz", baseURL, platform)
 }

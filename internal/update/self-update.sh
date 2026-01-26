@@ -9,7 +9,12 @@ BASE_URL="https://get.wantastic.app"
 LATEST_VERSION_URL="${BASE_URL}/latest"
 
 # Detect OS
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+UNAME_S="$(uname -s)"
+case "$UNAME_S" in
+    Linux*)     OS="linux" ;;
+    Darwin*)    OS="darwin" ;;
+    *)          echo "Unsupported Operating System: $UNAME_S"; exit 1 ;;
+esac
 ARCH_RAW="$(uname -m)"
 
 # Normalize Arch
@@ -49,7 +54,8 @@ main() {
     echo "Platform: ${OS}-${ARCH}"
 
     # Construct Download URL
-    DOWNLOAD_URL="${BASE_URL}/${VERSION}/wantasticd-${OS}-${ARCH}.tar.gz"
+    # Structure: https://get.wantastic.app/latest/wantasticd-<os>-<arch>.tar.gz
+    DOWNLOAD_URL="${BASE_URL}/latest/wantasticd-${OS}-${ARCH}.tar.gz"
     echo "Downloading from ${DOWNLOAD_URL}..."
 
     # Create temp directory
