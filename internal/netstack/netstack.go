@@ -6,12 +6,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
-
-	"reflect"
 	"unsafe"
+
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/grpc"
 
@@ -40,6 +41,7 @@ type Netstack struct {
 	mu            sync.RWMutex
 	listeners     map[int]net.Listener
 	negativeCache map[int]time.Time
+	peerCache     map[string]PeerInfo
 }
 
 func New(cfg *config.Config) (*Netstack, error) {
@@ -47,6 +49,7 @@ func New(cfg *config.Config) (*Netstack, error) {
 		config:        cfg,
 		listeners:     make(map[int]net.Listener),
 		negativeCache: make(map[int]time.Time),
+		peerCache:     make(map[string]PeerInfo),
 	}, nil
 }
 
@@ -177,8 +180,85 @@ func (ns *Netstack) proxyConnection(remote net.Conn, port int) {
 }
 
 func (ns *Netstack) Start() error {
+	ctx := context.Background()
 	go ns.reaper()
+	go ns.discoveryLoop(ctx)
+	go ns.startMDNS(ctx)
 	return nil
+}
+
+func (ns *Netstack) discoveryLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	// Initial scan
+	ns.refreshPeers()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ns.refreshPeers()
+		}
+	}
+}
+
+func (ns *Netstack) refreshPeers() {
+	ns.mu.RLock()
+	stackPtr := ns.net
+	ns.mu.RUnlock()
+
+	if stackPtr == nil {
+		return
+	}
+
+	subnets := ns.config.Server.AllowedIPs
+	if len(subnets) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 50)
+
+	for _, sub := range subnets {
+		if strings.Contains(sub, ":") {
+			continue
+		}
+
+		_, ipNet, err := net.ParseCIDR(sub)
+		if err != nil {
+			continue
+		}
+
+		mask, _ := ipNet.Mask.Size()
+		if mask < 22 {
+			continue // Avoid scanning huge networks
+		}
+
+		base := ipNet.IP.To4()
+		for i := 1; i < 255; i++ {
+			target := net.IPv4(base[0], base[1], base[2], byte(i))
+			if !ipNet.Contains(target) {
+				continue
+			}
+
+			wg.Add(1)
+			go func(ip net.IP) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				info := ns.probeHost(ip.String())
+				if info.Alive {
+					ns.mu.Lock()
+					ns.peerCache[ip.String()] = info
+					ns.mu.Unlock()
+				}
+			}(target)
+		}
+	}
+	wg.Wait()
 }
 
 func (ns *Netstack) reaper() {
@@ -275,111 +355,352 @@ func (ns *Netstack) UpdateNetworkConfig(config *grpc.NetworkConfiguration) error
 
 func (ns *Netstack) DiscoverPeersDetail() []PeerInfo {
 	ns.mu.RLock()
-	stack := ns.net
-	ns.mu.RUnlock()
+	defer ns.mu.RUnlock()
 
-	if stack == nil {
-		return nil
+	results := make([]PeerInfo, 0, len(ns.peerCache))
+	for _, info := range ns.peerCache {
+		results = append(results, info)
 	}
-
-	subnets := ns.config.Server.AllowedIPs
-	if len(subnets) == 0 {
-		return nil
-	}
-
-	var results []PeerInfo
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	sem := make(chan struct{}, 50)
-
-	for _, sub := range subnets {
-		if strings.Contains(sub, ":") {
-			continue
-		}
-
-		ip, ipNet, err := net.ParseCIDR(sub)
-		if err != nil {
-			continue
-		}
-
-		mask, _ := ipNet.Mask.Size()
-		if mask < 22 {
-			continue
-		}
-
-		base := ip.To4()
-		for i := 1; i < 255; i++ {
-			target := net.IPv4(base[0], base[1], base[2], byte(i))
-			if !ipNet.Contains(target) {
-				continue
-			}
-
-			wg.Add(1)
-			go func(t net.IP) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				info := ns.probeHost(t.String())
-				if info.Alive {
-					mu.Lock()
-					results = append(results, info)
-					mu.Unlock()
-				}
-			}(target)
-		}
-	}
-
-	wg.Wait()
 	return results
 }
 
 func (ns *Netstack) probeHost(target string) PeerInfo {
 	info := PeerInfo{IP: target}
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond) // Total timeout 2s
 	defer cancel()
 
+	// 1. L3/L4 Ping check
 	if d, err := ns.Ping(ctx, target); err == nil {
 		info.Alive = true
 		info.LatencyMs = d.Milliseconds()
-	}
-
-	ports := []int{22, 80, 443, 3389, 9034}
-	for _, p := range ports {
-		start := time.Now()
-		dCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		conn, err := ns.DialContext(dCtx, "tcp", net.JoinHostPort(target, fmt.Sprintf("%d", p)))
-		cancel()
-		if err == nil {
-			if info.LatencyMs == 0 {
+	} else {
+		// If ping failed, try TCP probe on common ports just in case ICMP is blocked
+		// Fast check on 80/443/22/8291
+		ports := []string{"80", "443", "22", "8291"}
+		for _, p := range ports {
+			start := time.Now()
+			dCtx, dCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+			conn, err := ns.DialContext(dCtx, "tcp", net.JoinHostPort(target, p))
+			dCancel()
+			if err == nil {
+				conn.Close()
+				info.Alive = true
 				info.LatencyMs = time.Since(start).Milliseconds()
-			}
-			info.Alive = true
-			switch p {
-			case 22:
-				conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
-				buf := make([]byte, 100)
-				if n, err := conn.Read(buf); err == nil {
-					banner := string(buf[:n])
-					if strings.Contains(banner, "Ubuntu") || strings.Contains(banner, "Debian") {
-						info.OS = "Linux (Ubuntu/Debian)"
-					} else if strings.Contains(banner, "OpenSSH") {
-						info.OS = "Linux/macOS"
-					}
-				}
-			case 3389:
-				info.OS = "Windows (RDP)"
-			case 9034:
-				info.Hostname = "Wantastic Agent"
-			}
-			conn.Close()
-			if info.OS != "" {
 				break
 			}
 		}
 	}
+
+	if !info.Alive {
+		return info
+	}
+
+	// 2. Deep Fingerprinting
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	// Detected attributes
+	var nbnsName string
+	var httpTitle string
+	var sshBanner string
+	var isWinbox, isRDP, isSMB bool
+
+	// Helper to safe-set
+	set := func(f func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		f()
+	}
+
+	// A. NBNS (UDP 137) - Hostname
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		name, err := ns.probeNBNS(target)
+		if err == nil && name != "" {
+			set(func() { nbnsName = name })
+		}
+	}()
+
+	// B. HTTP/HTTPS (Title & Server)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		title80, server80 := ns.probeHTTP(target, 80)
+		if title80 != "" {
+			set(func() { httpTitle = title80 })
+		}
+		// If 80 didn't yield much, try 443? (Skipping for speed unless 80 failed, maybe implement if needed)
+		if server80 != "" && title80 == "" {
+			// Try 443
+			// Impl omitted for brevity/speed, 80 is usually enough for local webs
+		}
+	}()
+
+	// C. SSH Banner (OS)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dCtx, dCancel := context.WithTimeout(ctx, 800*time.Millisecond)
+		defer dCancel()
+		conn, err := ns.DialContext(dCtx, "tcp", net.JoinHostPort(target, "22"))
+		if err == nil {
+			defer conn.Close()
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			buf := make([]byte, 256)
+			n, _ := conn.Read(buf)
+			if n > 0 {
+				set(func() { sshBanner = string(buf[:n]) })
+			}
+		}
+	}()
+
+	// D. Port Checks (Winbox, RDP, SMB)
+	checkPort := func(port int, flag *bool) {
+		dCtx, dCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer dCancel()
+		conn, err := ns.DialContext(dCtx, "tcp", net.JoinHostPort(target, fmt.Sprintf("%d", port)))
+		if err == nil {
+			conn.Close()
+			set(func() { *flag = true })
+		}
+	}
+
+	wg.Add(3)
+	go func() { defer wg.Done(); checkPort(8291, &isWinbox) }()
+	go func() { defer wg.Done(); checkPort(3389, &isRDP) }()
+	go func() { defer wg.Done(); checkPort(445, &isSMB) }()
+
+	wg.Wait()
+
+	// 3. Synthesize Results
+	// Hostname priority
+	if nbnsName != "" {
+		info.Hostname = nbnsName
+	} else if httpTitle != "" {
+		t := strings.TrimSpace(httpTitle)
+		if len(t) > 30 {
+			t = t[:30] + "..."
+		}
+		info.Hostname = t
+	}
+
+	// OS priority
+	if isWinbox {
+		info.OS = "RouterOS (MikroTik)"
+		if info.Hostname == "" {
+			info.Hostname = "MikroTik"
+		}
+	} else if isRDP || isSMB {
+		info.OS = "Windows"
+	} else if sshBanner != "" {
+		banner := strings.TrimSpace(sshBanner)
+		if strings.Contains(banner, "Ubuntu") {
+			info.OS = "Ubuntu Linux"
+		} else if strings.Contains(banner, "Debian") {
+			info.OS = "Debian Linux"
+		} else if strings.Contains(banner, "Alpine") {
+			info.OS = "Alpine Linux"
+		} else if strings.Contains(banner, "OpenSSH") {
+			info.OS = "Linux (OpenSSH)"
+		} else if strings.Contains(banner, "RouterOS") {
+			info.OS = "RouterOS (MikroTik)"
+		} else {
+			info.OS = "Linux/Unix"
+		}
+	} else if httpTitle != "" {
+		info.OS = "Web Server"
+	}
+
+	// Fallback/Special
+	if info.Hostname == "" && target == "10.255.255.249" {
+		info.Hostname = "Wantastic Agent"
+		info.OS = "Agent Node"
+	}
+
 	return info
+}
+
+// probeNBNS sends a Node Status Request to UDP 137
+func (ns *Netstack) probeNBNS(target string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	conn, err := ns.DialContext(ctx, "udp", net.JoinHostPort(target, "137"))
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	// Transaction ID: Random (0x1337)
+	// Flags: 0x0000 (Query) or 0x0010 (Broadcast?) - 0x0000 is usually fine for unicast
+	// Questions: 1
+	// Name: CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA (Wildcard)
+	// Type: 0x0021 (NBSTAT)
+	// Class: 0x0001 (IN)
+
+	packet := []byte{
+		0x13, 0x37, // Transaction ID
+		0x00, 0x00, // Flags
+		0x00, 0x01, // QDCount
+		0x00, 0x00, // ANCount
+		0x00, 0x00, // NSCount
+		0x00, 0x00, // ARCount
+		// Name "CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" (Encoded *)
+		0x20, // Length 32
+		0x43, 0x4B, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
+		0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
+		0x00,       // Terminator
+		0x00, 0x21, // Type NBSTAT
+		0x00, 0x01, // Class IN
+	}
+
+	_, err = conn.Write(packet)
+	if err != nil {
+		return "", err
+	}
+
+	buf := make([]byte, 1024)
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	n, err := conn.Read(buf)
+	if err != nil || n < 57 { // Min response size roughly
+		return "", err
+	}
+
+	// Simple parser: Find first name in the Name Array
+	// Skip Header (12) + Name (34) + Type(2) + Class(2) + TTL(4) + RdLength(2) + NumNames(1) = ~57 bytes
+	// Actually response has ANCount >= 1.
+	// We scan for the "Number of Names" byte.
+	// The response format for NBSTAT is data block.
+
+	// Scan: The Name "CK..." is in Query section. Answer section follows.
+	// We skip 12 header + question section (variable, but we know it's 34+4 = 38 bytes).
+	// So offset = 50.
+	// Then Answer Resource Record: Name (1 byte? or Pointer 2 bytes). usually Pointer 0xC00C.
+	// Then Type (2), Class (2), TTL (4), RDLength (2).
+	// Then RData.
+	// Inside RData: NumNames (1 byte).
+
+	// Heuristic: Search for the sequence of names.
+	// Names are 15 chars + 1 byte suffix + 2 bytes flags. = 18 bytes.
+	// We want the name with suffix 0x20 (File Server / Hostname) or 0x00 (Workstation).
+
+	data := buf[:n]
+	// Locate "Number of Names" - usually at offset ~56-57?
+	// Finding pattern is safer? NO, binary offsets are strict.
+
+	// Offset calculation is risky if compression used (C00C).
+	// For NBSTAT, simple offsets usually work.
+	// Header: 12 bytes.
+	// Question: 34 (Name) + 2 (Type) + 2 (Class) = 38.
+	// Total 50 bytes.
+	// Answer RR Header: Name (1 byte usually? No, it echoes question). If encoded name: 34 bytes.
+	// If compressed: 2 bytes (0xC00C).
+	// Let's assume compressed (most implementations).
+	// RR: Name (2 or 34) + Type(2) + Class(2) + TTL(4) + RDLength(2).
+
+	offset := 50
+	if offset >= len(data) {
+		return "", nil
+	}
+
+	// Answer Name
+	if data[offset]&0xC0 == 0xC0 {
+		offset += 2
+	} else {
+		// Skip full name
+		for offset < len(data) && data[offset] != 0 {
+			offset++
+		}
+		offset += (1 + 2 + 2) // Null + Type + Class (Wait, we need to be precise)
+		// Simpler: Just look for the Names Block inside the packet.
+		// The Names block consists of 18-byte records.
+		// The names are SPACE-padded ASCII.
+	}
+	// Skip Type(2), Class(2), TTL(4)
+	offset += 8
+	if offset+2 > len(data) {
+		return "", nil
+	}
+
+	rdLen := int(data[offset])<<8 | int(data[offset+1])
+	offset += 2
+
+	if offset+rdLen > len(data) {
+		return "", nil
+	}
+	rData := data[offset : offset+rdLen]
+
+	if len(rData) < 1 {
+		return "", nil
+	}
+	numNames := int(rData[0])
+
+	curr := 1
+	var bestName string
+
+	for i := 0; i < numNames; i++ {
+		if curr+18 > len(rData) {
+			break
+		}
+		nameBytes := rData[curr : curr+15]
+		suffix := rData[curr+15]
+		// flags := rData[curr+16 : curr+18]
+		curr += 18
+
+		name := strings.TrimSpace(string(nameBytes))
+
+		// Suffix 0x00 (Workstation) or 0x20 (Server) are good candidates
+		if suffix == 0x20 {
+			bestName = name
+			break // Server name is usually what we want
+		}
+		if suffix == 0x00 && bestName == "" {
+			bestName = name
+		}
+	}
+
+	return bestName, nil
+}
+
+// probeHTTP fetches Title or Server header
+func (ns *Netstack) probeHTTP(target string, port int) (string, string) {
+	dCtx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: ns.DialContext,
+		},
+	}
+
+	req, err := http.NewRequestWithContext(dCtx, "GET", fmt.Sprintf("http://%s:%d", target, port), nil)
+	if err != nil {
+		return "", ""
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+
+	server := resp.Header.Get("Server")
+
+	// Read first 2KB for title
+	buf := make([]byte, 2048)
+	n, _ := io.ReadFull(resp.Body, buf)
+	body := string(buf[:n])
+
+	var title string
+	if start := strings.Index(strings.ToLower(body), "<title>"); start != -1 {
+		if end := strings.Index(strings.ToLower(body[start:]), "</title>"); end != -1 {
+			title = body[start+7 : start+end]
+			title = strings.TrimSpace(title)
+		}
+	}
+
+	return title, server
 }
 
 func (ns *Netstack) DiscoverPeers() []string {

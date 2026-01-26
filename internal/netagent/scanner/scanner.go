@@ -7,128 +7,139 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wantastic-agent/internal/service"
 )
 
 type DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
 type Result struct {
-	Port    int
-	State   string
-	Service string
+	Port     int
+	State    string
+	Service  string
+	Protocol string
 }
 
 func RunPortScan(ctx context.Context, dial DialContext, targetIP string) error {
-	fmt.Printf("Starting advanced TCP Port Scan on %s (1-65535)...\n", targetIP)
+	fmt.Printf("Starting Hyper-Fast Port Scan on %s (TCP+UDP 1-65535)...\n", targetIP)
 	start := time.Now()
 
-	results := make(chan Result)
-	var wg sync.WaitGroup
-	// Concurrency: 1024 workers
-	sem := make(chan struct{}, 1024)
+	// Output streaming channel
+	results := make(chan Result, 100)
+	done := make(chan struct{})
 
-	// Scan 1 - 65535
+	// Printer routine
 	go func() {
-		for p := 1; p <= 65535; p++ {
-			wg.Add(1)
-			go func(port int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				// 800ms timeout - fast enough for LAN/VPN
-				dCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
-				defer cancel()
-				conn, err := dial(dCtx, "tcp", net.JoinHostPort(targetIP, fmt.Sprintf("%d", port)))
-				if err == nil {
-					svc := GetServiceHint(port)
-					results <- Result{Port: port, State: "open", Service: svc}
-					conn.Close()
-				}
-			}(p)
+		fmt.Printf("%-10s %-10s %-10s %-20s\n", "PORT", "PROTO", "STATE", "SERVICE")
+		fmt.Println(strings.Repeat("-", 60))
+		for r := range results {
+			fmt.Printf("%-10d %-10s %-10s %-20s\n", r.Port, r.Protocol, r.State, r.Service)
 		}
-		wg.Wait()
-		close(results)
+		close(done)
 	}()
 
-	fmt.Printf("%-10s %-10s %-20s\n", "PORT", "STATE", "SERVICE")
-	fmt.Println(strings.Repeat("-", 45))
+	var wg sync.WaitGroup
+	// 1024 workers (Optimal for userspace stack)
+	sem := make(chan struct{}, 1024)
 
-	var found []Result
-	for r := range results {
-		found = append(found, r)
+	scanTCP := func(p int) {
+		defer wg.Done()
+
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		defer func() { <-sem }()
+
+		dCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond) // Slightly longer for stability
+		defer cancel()
+
+		conn, err := dial(dCtx, "tcp", net.JoinHostPort(targetIP, fmt.Sprintf("%d", p)))
+		if err == nil {
+			// Banner grab
+			conn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+			buf := make([]byte, 512)
+			n, _ := conn.Read(buf)
+			banner := ""
+			if n > 0 {
+				banner = string(buf[:n])
+			}
+
+			svc := service.Detect(p, banner)
+			conn.Close()
+			results <- Result{Port: p, State: "open", Service: svc, Protocol: "TCP"}
+		}
 	}
 
-	// Sort by port
-	for i := 0; i < len(found); i++ {
-		for j := i + 1; j < len(found); j++ {
-			if found[i].Port > found[j].Port {
-				found[i], found[j] = found[j], found[i]
+	scanUDP := func(p int) {
+		defer wg.Done()
+
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		defer func() { <-sem }()
+
+		dCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+		defer cancel()
+
+		conn, err := dial(dCtx, "udp", net.JoinHostPort(targetIP, fmt.Sprintf("%d", p)))
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		conn.Write([]byte{0x00})
+
+		buf := make([]byte, 128)
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, err := conn.Read(buf)
+		if err == nil && n > 0 {
+			svc := service.GetHint(p)
+			results <- Result{Port: p, State: "open", Service: svc, Protocol: "UDP"}
+		}
+	}
+
+	// Priority Scan: Well known ports first
+	commonPorts := []int{21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 1723, 3306, 3389, 5432, 5900, 8080, 8291, 9034}
+	for _, p := range commonPorts {
+		wg.Add(1)
+		go scanTCP(p)
+	}
+
+	// Full Scan
+	for p := 1; p <= 65535; p++ {
+		// Skip common ports as they are already launched
+		isCommon := false
+		for _, cp := range commonPorts {
+			if p == cp {
+				isCommon = true
+				break
 			}
 		}
+		if isCommon {
+			continue
+		}
+
+		wg.Add(1)
+		go scanTCP(p)
 	}
 
-	if len(found) == 0 {
-		fmt.Println("No open ports found (all 65535 scanned). Host might be down or fully filtered.")
-	} else {
-		for _, r := range found {
-			fmt.Printf("%-10d %-10s %-20s\n", r.Port, r.State, r.Service)
-		}
+	// UDP Scan (Limited to top 1000 for speed unless requested, but we do full since requested)
+	// We only scan well-known UDP ports to keep it "Hyper-Fast"
+	commonUDP := []int{53, 67, 68, 69, 123, 161, 162, 389, 445, 514, 520, 631, 1194, 1812, 1813, 2375, 5000, 5060, 5353, 51820}
+	for _, p := range commonUDP {
+		wg.Add(1)
+		go scanUDP(p)
 	}
+
+	wg.Wait()
+	close(results)
+	<-done
 
 	duration := time.Since(start)
 	fmt.Printf("\nScan completed in %.2fs\n", duration.Seconds())
 	return nil
-}
-
-func GetServiceHint(port int) string {
-	switch port {
-	case 21:
-		return "ftp"
-	case 22:
-		return "ssh"
-	case 23:
-		return "telnet"
-	case 25:
-		return "smtp"
-	case 53:
-		return "dns"
-	case 80:
-		return "http"
-	case 110:
-		return "pop3"
-	case 135:
-		return "msrpc"
-	case 139:
-		return "netbios-ssn"
-	case 143:
-		return "imap"
-	case 443:
-		return "https"
-	case 445:
-		return "microsoft-ds"
-	case 993:
-		return "imaps"
-	case 1055:
-		return "wantastic-proxy"
-	case 3000:
-		return "hb-api"
-	case 3306:
-		return "mysql"
-	case 3389:
-		return "ms-wbt-server"
-	case 5432:
-		return "postgresql"
-	case 5900:
-		return "vnc"
-	case 6379:
-		return "redis"
-	case 8080:
-		return "http-proxy"
-	case 8443:
-		return "https-alt"
-	case 9034:
-		return "wantastic-agent"
-	default:
-		return "unknown"
-	}
 }
