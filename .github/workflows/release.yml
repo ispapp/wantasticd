@@ -17,15 +17,38 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view ${{ github.ref_name }} || gh release create ${{ github.ref_name }} --title "${{ github.ref_name }}" --draft --generate-notes --verify-tag
+          gh release view ${{ github.ref_name }} || gh release create ${{ github.ref_name }} --title "${{ github.ref_name }}" --generate-notes --verify-tag
 
   release:
     needs: create-release
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux]
-        goarch: [386, amd64, arm, arm64, loong64, mips, mips64, mips64le, mipsle, ppc64, ppc64le, riscv64, s390x] 
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+        include:
+          - goos: linux
+            goarch: 386
+          - goos: linux
+            goarch: arm
+          - goos: linux
+            goarch: loong64
+          - goos: linux
+            goarch: mips
+          - goos: linux
+            goarch: mips64
+          - goos: linux
+            goarch: mips64le
+          - goos: linux
+            goarch: mipsle
+          - goos: linux
+            goarch: ppc64
+          - goos: linux
+            goarch: ppc64le
+          - goos: linux
+            goarch: riscv64
+          - goos: linux
+            goarch: s390x 
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-go@v5
@@ -43,20 +66,25 @@ jobs:
       run: |
         export GOARCH=${{ matrix.goarch }}
         BINARY_NAME="wantasticd-${GOARCH}"
-        cp install.sh "${BINARY_NAME}-install.sh"
-        chmod +x "${BINARY_NAME}-install.sh"
-        tar -czvf "wantasticd-${GOARCH}.tar.gz" "${BINARY_NAME}" README.md "${BINARY_NAME}-install.sh"
+        # Rename to a generic name for the archive
+        mv "${BINARY_NAME}" wantasticd
+        tar -czvf "wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" wantasticd README.md
+
+
+    - name: Create Version File
+      run: echo "${{ github.ref_name }}" > latest
 
     - name: Upload Release Asset
       run: |
-        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goarch }}.tar.gz --clobber
+        gh release upload ${{ github.ref_name }} wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Prepare R2 Upload
       run: |
         mkdir -p r2_upload
-        cp wantasticd-${{ matrix.goarch }}.tar.gz r2_upload/
+        cp wantasticd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz r2_upload/
+        cp latest r2_upload/
 
     - name: Upload to R2 (Versioned)
       uses: ryand56/r2-upload-action@latest
@@ -87,7 +115,9 @@ jobs:
       run: |
         mkdir -p root_upload
         cp install.sh root_upload/
-    - name: Upload Install Script to R2 Root
+        echo "${{ github.ref_name }}" > root_upload/latest
+
+    - name: Upload Root Artifacts to R2
       uses: ryand56/r2-upload-action@latest
       with:
         r2-account-id: ${{ secrets.R2_ACCOUNT }}
@@ -96,3 +126,4 @@ jobs:
         r2-bucket: ${{ secrets.R2_BUCKET }}
         source-dir: root_upload
         destination-dir: ./
+

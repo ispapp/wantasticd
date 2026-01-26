@@ -132,13 +132,14 @@ func (m *Manager) restart() error {
 	return nil
 }
 
-// GetPlatform returns the current architecture for update URLs
+// GetPlatform returns the current OS and architecture for update URLs
 func GetPlatform() string {
-	return runtime.GOARCH
+	return fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
 }
 
-// BuildUpdateURL constructs an update URL for the given version and architecture
-func BuildUpdateURL(baseURL, version, arch string) string {
-	// Pattern: https://get.wantastic.app/${version}/wantasticd-${arch}.tar.gz
-	return fmt.Sprintf("%s/%s/wantasticd-%s.tar.gz", baseURL, version, arch)
+// BuildUpdateURL constructs an update URL for the given version and platform
+func BuildUpdateURL(baseURL, version, platform string) string {
+	// Pattern: https://get.wantastic.app/${version}/wantasticd-${platform}.tar.gz
+	// platform is expected to be eg: linux-amd64 or darwin-arm64
+	return fmt.Sprintf("%s/%s/wantasticd-%s.tar.gz", baseURL, version, platform)
 }

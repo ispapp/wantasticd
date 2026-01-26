@@ -187,7 +187,7 @@ func runAgent(configPath string, verbose bool) {
 }
 
 func printVersion() {
-	fmt.Printf("%s\n", version)
+	fmt.Printf("wantasticd version %s\n", version)
 }
 
 func handleUpdate() {
