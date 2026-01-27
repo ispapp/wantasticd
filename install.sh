@@ -135,7 +135,61 @@ if [ -n "$TOKEN" ]; then
 else
     echo "No token provided."
     echo "Starting interactive login..."
-    # Run interactive login. This will print the auth URL, wait for flow completion, save config, AND start the agent (blocking).
-    "$INSTALL_PATH" login
+    # Run interactive login. 
+    # If it fails (e.g. no internet, firewall, embedded device issues), fall back to manual config guidance
+    if ! "$INSTALL_PATH" login; then
+        echo ""
+        echo "Interactive login failed or timed out."
+        echo "This is common on embedded devices or restricted networks."
+        echo "Switching to manual configuration setup..."
+
+        # Define config location
+        CONF_DIR="/etc/wantasticd"
+        CONF_FILE="${CONF_DIR}/config.conf"
+
+        # Create Config Directory
+        if [ ! -d "$CONF_DIR" ]; then
+            echo "Creating config directory: $CONF_DIR"
+            if ! sudo mkdir -p "$CONF_DIR"; then
+                 echo "Warning: Failed to create $CONF_DIR. Falling back to current directory."
+                 CONF_DIR="$(pwd)"
+                 CONF_FILE="${CONF_DIR}/wantastic_demo.conf"
+            fi
+        fi
+
+        # Write Demo Config
+        # We use tee to handle permission escalation if needed
+        # This is a template based on standard WireGuard config
+        cat <<EOF | sudo tee "$CONF_FILE" > /dev/null
+[Interface]
+# Replace with your Private Key
+PrivateKey = <YOUR_PRIVATE_KEY>
+# Replace with your assigned IP address
+Address = 10.x.x.x/32
+
+[Peer]
+# Server Public Key
+PublicKey = O9l0CxzEiIPTI2g40feX+Wo8ZQE9P9ndft+UxfEAEEM=
+# Server Endpoint
+Endpoint = wg.wantastic.app:51820
+# Allowed IPs for the overlay network
+AllowedIPs = 10.0.0.0/8
+PersistentKeepalive = 25
+EOF
+
+        echo ""
+        echo "--------------------------------------------------------"
+        echo "Manual Configuration Required"
+        echo "--------------------------------------------------------"
+        echo "A demo configuration file has been created at:"
+        echo "  $CONF_FILE"
+        echo ""
+        echo "1. Edit this file with your actual credentials:"
+        echo "   sudo nano $CONF_FILE"
+        echo ""
+        echo "2. Connect manually:"
+        echo "   wantasticd connect -config $CONF_FILE &"
+        echo "--------------------------------------------------------"
+    fi
 fi
 
