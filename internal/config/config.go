@@ -3,7 +3,9 @@ package config
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,12 +13,14 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 	"wantastic-agent/internal/grpc"
 
 	"github.com/denisbrodbeck/machineid"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // resolveEndpoint resolves a hostname to an IP address using Cloudflare DNS (1.1.1.1:53)
@@ -256,11 +260,79 @@ func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) 
 }
 
 // LoadFromToken loads the configuration from a token.
-// It first attempts to parse the token as JSON.
-// If that fails, it returns an error indicating that token loading is not implemented yet.
-func LoadFromToken(ctx context.Context, token string) (*Config, error) {
-	// TODO: Implement token loading
-	return nil, fmt.Errorf("token loading not implemented yet")
+func LoadFromToken(ctx context.Context, serverURL, token string) (*Config, error) {
+	// Create gRPC client
+	client, err := grpc.New(serverURL, "", token)
+	if err != nil {
+		return nil, fmt.Errorf("create grpc client: %w", err)
+	}
+	defer client.Close()
+
+	// Gather system information (fingerprint)
+	hostname, _ := os.Hostname()
+	osInfo := runtime.GOOS
+	arch := runtime.GOARCH
+
+	// Generate a random int64 nonce
+	var nonce int64
+	if err := binary.Read(rand.Reader, binary.LittleEndian, &nonce); err != nil {
+		// Fallback to time if rand fails (unlikely)
+		nonce = time.Now().UnixNano()
+	}
+
+	resp, err := client.RegisterDevice(ctx, nonce, osInfo, arch, hostname)
+	if err != nil {
+		return nil, fmt.Errorf("register device: %w", err)
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("registration failed")
+	}
+
+	// Decrypt configuration if provided
+	if len(resp.EncryptedConfig) > 0 {
+		// Derive key from token: Key = SHA256(Token)
+		hash := sha256.Sum256([]byte(token))
+		key := hash[:]
+
+		// Construct Nonce
+		// ChaCha20Poly1305 requires a 12-byte nonce.
+		// We have an 8-byte int64 nonce (nonce).
+		// We pad it with zeros to 12 bytes.
+		nonceBytes := make([]byte, 12)
+		binary.LittleEndian.PutUint64(nonceBytes[:8], uint64(nonce))
+
+		// Create Cipher
+		aead, err := chacha20poly1305.New(key)
+		if err != nil {
+			return nil, fmt.Errorf("create cipher: %w", err)
+		}
+
+		// Decrypt
+		decrypted, err := aead.Open(nil, nonceBytes, resp.EncryptedConfig, nil)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt config: %w", err)
+		}
+
+		// The decrypted content is a traditional WireGuard config file (INI format)
+		configData := string(decrypted)
+
+		cfgStruct, err := parseTraditionalWireGuardConfig(configData)
+		if err != nil {
+			return nil, fmt.Errorf("parse decrypted config: %w", err)
+		}
+
+		cfg := &cfgStruct
+		cfg.Auth.ServerURL = serverURL
+		cfg.Auth.Token = resp.Token // Use potentially new token
+
+		// Ensure DeviceID is set
+		cfg.GenerateDeviceID()
+
+		return cfg, nil
+	}
+
+	return nil, fmt.Errorf("no encrypted configuration received")
 }
 
 // Validate validates the configuration.

@@ -24,9 +24,11 @@ service AuthService {
 
 // RegisterDeviceRequest contains device registration information
 message RegisterDeviceRequest {
-  string device_id = 1;
-  string public_key = 2;
-  string tenant_id = 3;
+  string token = 1;
+  int64 nonce = 4;
+  string os = 5;
+  string arch = 6;
+  string hostname = 7;
 }
 
 // RegisterDeviceResponse contains the registration result and configuration
@@ -42,12 +44,12 @@ message RegisterDeviceResponse {
   repeated string routes = 9;
   int32 mtu = 10;
   int32 listen_port = 11;
+  bytes encrypted_config = 12;
 }
 
 // RefreshTokenRequest contains token refresh information
 message RefreshTokenRequest {
-  string device_id = 1;
-  string token = 2;
+  string token = 1;
 }
 
 // RefreshTokenResponse contains the token refresh result
@@ -58,8 +60,7 @@ message RefreshTokenResponse {
 
 // GetConfigurationRequest contains configuration retrieval information
 message GetConfigurationRequest {
-  string device_id = 1;
-  string token = 2;
+  string token = 1;
 }
 
 // GetConfigurationResponse contains the device configuration

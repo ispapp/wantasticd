@@ -6,9 +6,9 @@ import (
 	"log"
 	"sync"
 	"time"
+	"wantastic-agent/internal/certs"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -106,9 +106,11 @@ type PollDeviceFlowResponse struct {
 }
 
 type RegisterDeviceRequest struct {
-	DeviceID  string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	PublicKey string `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	TenantID  string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Token    string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Nonce    int64  `protobuf:"varint,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	OS       string `protobuf:"bytes,5,opt,name=os,proto3" json:"os,omitempty"`
+	Arch     string `protobuf:"bytes,6,opt,name=arch,proto3" json:"arch,omitempty"`
+	Hostname string `protobuf:"bytes,7,opt,name=hostname,proto3" json:"hostname,omitempty"`
 }
 
 type RegisterDeviceResponse struct {
@@ -123,6 +125,7 @@ type RegisterDeviceResponse struct {
 	Routes              []string `protobuf:"bytes,9,rep,name=routes,proto3" json:"routes,omitempty"`
 	MTU                 int32    `protobuf:"varint,10,opt,name=mtu,proto3" json:"mtu,omitempty"`
 	ListenPort          int32    `protobuf:"varint,11,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	EncryptedConfig     []byte   `protobuf:"bytes,12,opt,name=encrypted_config,json=encryptedConfig,proto3" json:"encrypted_config,omitempty"`
 }
 
 type RefreshTokenRequest struct {
@@ -204,8 +207,14 @@ func (c *Client) connect() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Load mTLS credentials
+	creds, err := certs.LoadClientTLSCredentials()
+	if err != nil {
+		return fmt.Errorf("load tls credentials: %w", err)
+	}
+
 	conn, err := grpc.DialContext(ctx, c.serverURL,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 		grpc.WithBlock())
 	if err != nil {
 		return fmt.Errorf("dial auth server: %w", err)
@@ -231,17 +240,22 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) RegisterDevice(ctx context.Context, publicKey string) (*RegisterDeviceResponse, error) {
+func (c *Client) RegisterDevice(ctx context.Context, nonce int64, osInfo, arch, hostname string) (*RegisterDeviceResponse, error) {
 	c.mu.RLock()
-	if !c.connected {
+	// Connection check removed as we might be connecting for the first time with a token
+	if c.client == nil {
 		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to auth server")
+		return nil, fmt.Errorf("client not initialized")
 	}
+	token := c.token
 	c.mu.RUnlock()
 
 	req := &RegisterDeviceRequest{
-		DeviceID:  c.deviceID,
-		PublicKey: publicKey,
+		Token:    token,
+		Nonce:    nonce,
+		OS:       osInfo,
+		Arch:     arch,
+		Hostname: hostname,
 	}
 
 	md := metadata.Pairs("authorization", fmt.Sprintf("Bearer %s", c.token))

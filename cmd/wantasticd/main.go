@@ -76,7 +76,7 @@ func handleLogin() {
 	var err error
 
 	if *token != "" {
-		cfg, err = config.LoadFromToken(ctx, *token)
+		cfg, err = config.LoadFromToken(ctx, *serverURL, *token)
 	} else {
 		cfg, err = config.LoadFromDeviceFlow(ctx, *serverURL)
 	}
