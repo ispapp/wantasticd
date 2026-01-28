@@ -10,6 +10,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+
+	pb "wantastic-agent/internal/grpc/proto"
 )
 
 type Client struct {
@@ -18,167 +20,10 @@ type Client struct {
 	token     string
 
 	conn   *grpc.ClientConn
-	client AuthServiceClient
+	client pb.AuthServiceClient
 
 	mu        sync.RWMutex
 	connected bool
-}
-
-type AuthServiceClient interface {
-	RegisterDevice(ctx context.Context, in *RegisterDeviceRequest, opts ...grpc.CallOption) (*RegisterDeviceResponse, error)
-	RefreshToken(ctx context.Context, in *RefreshTokenRequest, opts ...grpc.CallOption) (*RefreshTokenResponse, error)
-	GetConfiguration(ctx context.Context, in *GetConfigurationRequest, opts ...grpc.CallOption) (*GetConfigurationResponse, error)
-	StartDeviceFlow(ctx context.Context, in *StartDeviceFlowRequest, opts ...grpc.CallOption) (*StartDeviceFlowResponse, error)
-	PollDeviceFlow(ctx context.Context, in *PollDeviceFlowRequest, opts ...grpc.CallOption) (*PollDeviceFlowResponse, error)
-}
-
-type authServiceClient struct {
-	cc grpc.ClientConnInterface
-}
-
-func NewAuthServiceClient(cc grpc.ClientConnInterface) AuthServiceClient {
-	return &authServiceClient{cc}
-}
-
-func (c *authServiceClient) RegisterDevice(ctx context.Context, in *RegisterDeviceRequest, opts ...grpc.CallOption) (*RegisterDeviceResponse, error) {
-	out := new(RegisterDeviceResponse)
-	err := c.cc.Invoke(ctx, "/grpc.AuthService/RegisterDevice", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *authServiceClient) RefreshToken(ctx context.Context, in *RefreshTokenRequest, opts ...grpc.CallOption) (*RefreshTokenResponse, error) {
-	out := new(RefreshTokenResponse)
-	err := c.cc.Invoke(ctx, "/grpc.AuthService/RefreshToken", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *authServiceClient) GetConfiguration(ctx context.Context, in *GetConfigurationRequest, opts ...grpc.CallOption) (*GetConfigurationResponse, error) {
-	out := new(GetConfigurationResponse)
-	err := c.cc.Invoke(ctx, "/grpc.AuthService/GetConfiguration", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *authServiceClient) StartDeviceFlow(ctx context.Context, in *StartDeviceFlowRequest, opts ...grpc.CallOption) (*StartDeviceFlowResponse, error) {
-	out := new(StartDeviceFlowResponse)
-	err := c.cc.Invoke(ctx, "/grpc.AuthService/StartDeviceFlow", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *authServiceClient) PollDeviceFlow(ctx context.Context, in *PollDeviceFlowRequest, opts ...grpc.CallOption) (*PollDeviceFlowResponse, error) {
-	out := new(PollDeviceFlowResponse)
-	err := c.cc.Invoke(ctx, "/grpc.AuthService/PollDeviceFlow", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-type StartDeviceFlowRequest struct {
-	DeviceID string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-}
-
-type StartDeviceFlowResponse struct {
-	DeviceCode      string `protobuf:"bytes,1,opt,name=device_code,json=deviceCode,proto3" json:"device_code,omitempty"`
-	UserCode        string `protobuf:"bytes,2,opt,name=user_code,json=userCode,proto3" json:"user_code,omitempty"`
-	VerificationURI string `protobuf:"bytes,3,opt,name=verification_uri,json=verificationUri,proto3" json:"verification_uri,omitempty"`
-	ExpiresIn       int32  `protobuf:"varint,4,opt,name=expires_in,json=expiresIn,proto3" json:"expires_in,omitempty"`
-	Interval        int32  `protobuf:"varint,5,opt,name=interval,proto3" json:"interval,omitempty"`
-}
-
-type PollDeviceFlowRequest struct {
-	DeviceCode string `protobuf:"bytes,1,opt,name=device_code,json=deviceCode,proto3" json:"device_code,omitempty"`
-}
-
-type PollDeviceFlowResponse struct {
-	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-}
-
-type RegisterDeviceRequest struct {
-	Token    string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	Nonce    int64  `protobuf:"varint,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	OS       string `protobuf:"bytes,5,opt,name=os,proto3" json:"os,omitempty"`
-	Arch     string `protobuf:"bytes,6,opt,name=arch,proto3" json:"arch,omitempty"`
-	Hostname string `protobuf:"bytes,7,opt,name=hostname,proto3" json:"hostname,omitempty"`
-}
-
-type RegisterDeviceResponse struct {
-	Success             bool     `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Token               string   `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-	ServerKey           string   `protobuf:"bytes,3,opt,name=server_key,json=serverKey,proto3" json:"server_key,omitempty"`
-	Endpoint            string   `protobuf:"bytes,4,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	AllowedIPs          []string `protobuf:"bytes,5,rep,name=allowed_ips,json=allowedIps,proto3" json:"allowed_ips,omitempty"`
-	PersistentKeepalive int32    `protobuf:"varint,6,opt,name=persistent_keepalive,json=persistentKeepalive,proto3" json:"persistent_keepalive,omitempty"`
-	DNSServers          []string `protobuf:"bytes,7,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`
-	ForwardingRules     []string `protobuf:"bytes,8,rep,name=forwarding_rules,json=forwardingRules,proto3" json:"forwarding_rules,omitempty"`
-	Routes              []string `protobuf:"bytes,9,rep,name=routes,proto3" json:"routes,omitempty"`
-	MTU                 int32    `protobuf:"varint,10,opt,name=mtu,proto3" json:"mtu,omitempty"`
-	ListenPort          int32    `protobuf:"varint,11,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
-	EncryptedConfig     []byte   `protobuf:"bytes,12,opt,name=encrypted_config,json=encryptedConfig,proto3" json:"encrypted_config,omitempty"`
-}
-
-type RefreshTokenRequest struct {
-	DeviceID string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Token    string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-}
-
-type RefreshTokenResponse struct {
-	Success bool   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Token   string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-}
-
-type GetConfigurationRequest struct {
-	DeviceID string `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Token    string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-}
-
-type GetConfigurationResponse struct {
-	DeviceConfig    *DeviceConfiguration   `protobuf:"bytes,1,opt,name=device_config,json=deviceConfig,proto3" json:"device_config,omitempty"`
-	ServerConfig    *ServerConfiguration   `protobuf:"bytes,2,opt,name=server_config,json=serverConfig,proto3" json:"server_config,omitempty"`
-	NetworkConfig   *NetworkConfiguration  `protobuf:"bytes,3,opt,name=network_config,json=networkConfig,proto3" json:"network_config,omitempty"`
-	ExitNodeConfig  *ExitNodeConfiguration `protobuf:"bytes,4,opt,name=exit_node_config,json=exitNodeConfig,proto3" json:"exit_node_config,omitempty"`
-	UpdateAvailable bool                   `protobuf:"varint,5,opt,name=update_available,json=updateAvailable,proto3" json:"update_available,omitempty"`
-	UpdateVersion   string                 `protobuf:"bytes,6,opt,name=update_version,json=updateVersion,proto3" json:"update_version,omitempty"`
-	UpdateURL       string                 `protobuf:"bytes,7,opt,name=update_url,json=updateUrl,proto3" json:"update_url,omitempty"`
-}
-
-type DeviceConfiguration struct {
-	Addresses  []string `protobuf:"bytes,1,rep,name=addresses,proto3" json:"addresses,omitempty"`
-	ListenPort int32    `protobuf:"varint,2,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
-	MTU        int32    `protobuf:"varint,3,opt,name=mtu,proto3" json:"mtu,omitempty"`
-	DNS        []string `protobuf:"bytes,4,rep,name=dns,proto3" json:"dns,omitempty"`
-}
-
-type ServerConfiguration struct {
-	Endpoint            string   `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	Port                int32    `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
-	PublicKey           string   `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	AllowedIPs          []string `protobuf:"bytes,4,rep,name=allowed_ips,json=allowedIps,proto3" json:"allowed_ips,omitempty"`
-	PersistentKeepalive int32    `protobuf:"varint,5,opt,name=persistent_keepalive,json=persistentKeepalive,proto3" json:"persistent_keepalive,omitempty"`
-}
-
-type NetworkConfiguration struct {
-	Routes          []string `protobuf:"bytes,1,rep,name=routes,proto3" json:"routes,omitempty"`
-	ForwardingRules []string `protobuf:"bytes,2,rep,name=forwarding_rules,json=forwardingRules,proto3" json:"forwarding_rules,omitempty"`
-	FirewallRules   []string `protobuf:"bytes,3,rep,name=firewall_rules,json=firewallRules,proto3" json:"firewall_rules,omitempty"`
-}
-
-type ExitNodeConfiguration struct {
-	Enabled    bool     `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	ExitRoutes []string `protobuf:"bytes,2,rep,name=exit_routes,json=exitRoutes,proto3" json:"exit_routes,omitempty"`
-	ExitDNS    []string `protobuf:"bytes,3,rep,name=exit_dns,json=exitDns,proto3" json:"exit_dns,omitempty"`
-	AllowLAN   bool     `protobuf:"varint,4,opt,name=allow_lan,json=allowLan,proto3" json:"allow_lan,omitempty"`
 }
 
 func New(serverURL, deviceID, token string) (*Client, error) {
@@ -223,7 +68,7 @@ func (c *Client) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.conn = conn
-	c.client = NewAuthServiceClient(conn)
+	c.client = pb.NewAuthServiceClient(conn)
 	c.connected = true
 
 	log.Printf("Connected to auth server: %s", c.serverURL)
@@ -240,7 +85,7 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) RegisterDevice(ctx context.Context, nonce int64, osInfo, arch, hostname string) (*RegisterDeviceResponse, error) {
+func (c *Client) RegisterDevice(ctx context.Context, nonce int64, osInfo, arch, hostname string) (*pb.RegisterDeviceResponse, error) {
 	c.mu.RLock()
 	// Connection check removed as we might be connecting for the first time with a token
 	if c.client == nil {
@@ -250,10 +95,10 @@ func (c *Client) RegisterDevice(ctx context.Context, nonce int64, osInfo, arch, 
 	token := c.token
 	c.mu.RUnlock()
 
-	req := &RegisterDeviceRequest{
+	req := &pb.RegisterDeviceRequest{
 		Token:    token,
 		Nonce:    nonce,
-		OS:       osInfo,
+		Os:       osInfo,
 		Arch:     arch,
 		Hostname: hostname,
 	}
@@ -280,9 +125,8 @@ func (c *Client) RefreshAuth(ctx context.Context) error {
 	token := c.token
 	c.mu.RUnlock()
 
-	req := &RefreshTokenRequest{
-		DeviceID: c.deviceID,
-		Token:    token,
+	req := &pb.RefreshTokenRequest{
+		Token: token,
 	}
 
 	md := metadata.Pairs("authorization", fmt.Sprintf("Bearer %s", token))
@@ -303,14 +147,13 @@ func (c *Client) RefreshAuth(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) GetConfiguration(ctx context.Context) (*GetConfigurationResponse, error) {
+func (c *Client) GetConfiguration(ctx context.Context) (*pb.GetConfigurationResponse, error) {
 	c.mu.RLock()
 	token := c.token
 	c.mu.RUnlock()
 
-	req := &GetConfigurationRequest{
-		DeviceID: c.deviceID,
-		Token:    token,
+	req := &pb.GetConfigurationRequest{
+		Token: token,
 	}
 
 	md := metadata.Pairs("authorization", fmt.Sprintf("Bearer %s", token))
@@ -324,7 +167,7 @@ func (c *Client) GetConfiguration(ctx context.Context) (*GetConfigurationRespons
 	return resp, nil
 }
 
-func (c *Client) StartDeviceFlow(ctx context.Context) (*GetConfigurationResponse, error) {
+func (c *Client) StartDeviceFlow(ctx context.Context) (*pb.GetConfigurationResponse, error) {
 	c.mu.RLock()
 	if !c.connected {
 		c.mu.RUnlock()
@@ -332,8 +175,8 @@ func (c *Client) StartDeviceFlow(ctx context.Context) (*GetConfigurationResponse
 	}
 	c.mu.RUnlock()
 
-	req := &StartDeviceFlowRequest{
-		DeviceID: c.deviceID,
+	req := &pb.StartDeviceFlowRequest{
+		DeviceId: c.deviceID,
 	}
 
 	resp, err := c.client.StartDeviceFlow(ctx, req)
@@ -341,7 +184,7 @@ func (c *Client) StartDeviceFlow(ctx context.Context) (*GetConfigurationResponse
 		return nil, fmt.Errorf("start device flow: %w", err)
 	}
 
-	fmt.Printf("Please go to %s and enter the code: %s\n", resp.VerificationURI, resp.UserCode)
+	fmt.Printf("Please go to %s and enter the code: %s\n", resp.VerificationUri, resp.UserCode)
 
 	ticker := time.NewTicker(time.Duration(resp.Interval) * time.Second)
 	defer ticker.Stop()
@@ -351,7 +194,7 @@ func (c *Client) StartDeviceFlow(ctx context.Context) (*GetConfigurationResponse
 	for {
 		select {
 		case <-ticker.C:
-			pollReq := &PollDeviceFlowRequest{
+			pollReq := &pb.PollDeviceFlowRequest{
 				DeviceCode: resp.DeviceCode,
 			}
 			pollResp, err := c.client.PollDeviceFlow(ctx, pollReq)

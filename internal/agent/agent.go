@@ -12,6 +12,7 @@ import (
 	"wantastic-agent/internal/config"
 	"wantastic-agent/internal/device"
 	"wantastic-agent/internal/grpc"
+	pb "wantastic-agent/internal/grpc/proto"
 	"wantastic-agent/internal/ipc"
 	"wantastic-agent/internal/netstack"
 )
@@ -285,7 +286,7 @@ func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 	return nil
 }
 
-func (a *Agent) applyConfiguration(resp *grpc.GetConfigurationResponse) error {
+func (a *Agent) applyConfiguration(resp *pb.GetConfigurationResponse) error {
 	if resp.DeviceConfig != nil {
 		if err := a.device.UpdateConfig(resp.DeviceConfig); err != nil {
 			return fmt.Errorf("update device config: %w", err)

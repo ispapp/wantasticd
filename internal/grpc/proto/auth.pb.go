@@ -2,16 +2,17 @@
 // versions:
 // 	protoc-gen-go v1.36.10
 // 	protoc        v6.32.1
-// source: proto/auth.proto
+// source: auth.proto
 
 package grpc
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -24,16 +25,18 @@ const (
 // RegisterDeviceRequest contains device registration information
 type RegisterDeviceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	PublicKey     string                 `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Nonce         int64                  `protobuf:"varint,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Os            string                 `protobuf:"bytes,5,opt,name=os,proto3" json:"os,omitempty"`
+	Arch          string                 `protobuf:"bytes,6,opt,name=arch,proto3" json:"arch,omitempty"`
+	Hostname      string                 `protobuf:"bytes,7,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterDeviceRequest) Reset() {
 	*x = RegisterDeviceRequest{}
-	mi := &file_proto_auth_proto_msgTypes[0]
+	mi := &file_auth_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -45,7 +48,7 @@ func (x *RegisterDeviceRequest) String() string {
 func (*RegisterDeviceRequest) ProtoMessage() {}
 
 func (x *RegisterDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[0]
+	mi := &file_auth_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -58,26 +61,40 @@ func (x *RegisterDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterDeviceRequest.ProtoReflect.Descriptor instead.
 func (*RegisterDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{0}
+	return file_auth_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *RegisterDeviceRequest) GetDeviceId() string {
+func (x *RegisterDeviceRequest) GetToken() string {
 	if x != nil {
-		return x.DeviceId
+		return x.Token
 	}
 	return ""
 }
 
-func (x *RegisterDeviceRequest) GetPublicKey() string {
+func (x *RegisterDeviceRequest) GetNonce() int64 {
 	if x != nil {
-		return x.PublicKey
+		return x.Nonce
+	}
+	return 0
+}
+
+func (x *RegisterDeviceRequest) GetOs() string {
+	if x != nil {
+		return x.Os
 	}
 	return ""
 }
 
-func (x *RegisterDeviceRequest) GetTenantId() string {
+func (x *RegisterDeviceRequest) GetArch() string {
 	if x != nil {
-		return x.TenantId
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *RegisterDeviceRequest) GetHostname() string {
+	if x != nil {
+		return x.Hostname
 	}
 	return ""
 }
@@ -96,13 +113,14 @@ type RegisterDeviceResponse struct {
 	Routes              []string               `protobuf:"bytes,9,rep,name=routes,proto3" json:"routes,omitempty"`
 	Mtu                 int32                  `protobuf:"varint,10,opt,name=mtu,proto3" json:"mtu,omitempty"`
 	ListenPort          int32                  `protobuf:"varint,11,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	EncryptedConfig     []byte                 `protobuf:"bytes,12,opt,name=encrypted_config,json=encryptedConfig,proto3" json:"encrypted_config,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RegisterDeviceResponse) Reset() {
 	*x = RegisterDeviceResponse{}
-	mi := &file_proto_auth_proto_msgTypes[1]
+	mi := &file_auth_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -114,7 +132,7 @@ func (x *RegisterDeviceResponse) String() string {
 func (*RegisterDeviceResponse) ProtoMessage() {}
 
 func (x *RegisterDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[1]
+	mi := &file_auth_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -127,7 +145,7 @@ func (x *RegisterDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterDeviceResponse.ProtoReflect.Descriptor instead.
 func (*RegisterDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{1}
+	return file_auth_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RegisterDeviceResponse) GetSuccess() bool {
@@ -207,18 +225,24 @@ func (x *RegisterDeviceResponse) GetListenPort() int32 {
 	return 0
 }
 
+func (x *RegisterDeviceResponse) GetEncryptedConfig() []byte {
+	if x != nil {
+		return x.EncryptedConfig
+	}
+	return nil
+}
+
 // RefreshTokenRequest contains token refresh information
 type RefreshTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RefreshTokenRequest) Reset() {
 	*x = RefreshTokenRequest{}
-	mi := &file_proto_auth_proto_msgTypes[2]
+	mi := &file_auth_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -230,7 +254,7 @@ func (x *RefreshTokenRequest) String() string {
 func (*RefreshTokenRequest) ProtoMessage() {}
 
 func (x *RefreshTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[2]
+	mi := &file_auth_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -243,14 +267,7 @@ func (x *RefreshTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshTokenRequest.ProtoReflect.Descriptor instead.
 func (*RefreshTokenRequest) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *RefreshTokenRequest) GetDeviceId() string {
-	if x != nil {
-		return x.DeviceId
-	}
-	return ""
+	return file_auth_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RefreshTokenRequest) GetToken() string {
@@ -271,7 +288,7 @@ type RefreshTokenResponse struct {
 
 func (x *RefreshTokenResponse) Reset() {
 	*x = RefreshTokenResponse{}
-	mi := &file_proto_auth_proto_msgTypes[3]
+	mi := &file_auth_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -283,7 +300,7 @@ func (x *RefreshTokenResponse) String() string {
 func (*RefreshTokenResponse) ProtoMessage() {}
 
 func (x *RefreshTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[3]
+	mi := &file_auth_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -296,7 +313,7 @@ func (x *RefreshTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshTokenResponse.ProtoReflect.Descriptor instead.
 func (*RefreshTokenResponse) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{3}
+	return file_auth_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RefreshTokenResponse) GetSuccess() bool {
@@ -316,15 +333,14 @@ func (x *RefreshTokenResponse) GetToken() string {
 // GetConfigurationRequest contains configuration retrieval information
 type GetConfigurationRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetConfigurationRequest) Reset() {
 	*x = GetConfigurationRequest{}
-	mi := &file_proto_auth_proto_msgTypes[4]
+	mi := &file_auth_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -336,7 +352,7 @@ func (x *GetConfigurationRequest) String() string {
 func (*GetConfigurationRequest) ProtoMessage() {}
 
 func (x *GetConfigurationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[4]
+	mi := &file_auth_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -349,14 +365,7 @@ func (x *GetConfigurationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigurationRequest.ProtoReflect.Descriptor instead.
 func (*GetConfigurationRequest) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *GetConfigurationRequest) GetDeviceId() string {
-	if x != nil {
-		return x.DeviceId
-	}
-	return ""
+	return file_auth_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetConfigurationRequest) GetToken() string {
@@ -382,7 +391,7 @@ type GetConfigurationResponse struct {
 
 func (x *GetConfigurationResponse) Reset() {
 	*x = GetConfigurationResponse{}
-	mi := &file_proto_auth_proto_msgTypes[5]
+	mi := &file_auth_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -394,7 +403,7 @@ func (x *GetConfigurationResponse) String() string {
 func (*GetConfigurationResponse) ProtoMessage() {}
 
 func (x *GetConfigurationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[5]
+	mi := &file_auth_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -407,7 +416,7 @@ func (x *GetConfigurationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigurationResponse.ProtoReflect.Descriptor instead.
 func (*GetConfigurationResponse) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{5}
+	return file_auth_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetConfigurationResponse) GetDeviceConfig() *DeviceConfiguration {
@@ -472,7 +481,7 @@ type DeviceConfiguration struct {
 
 func (x *DeviceConfiguration) Reset() {
 	*x = DeviceConfiguration{}
-	mi := &file_proto_auth_proto_msgTypes[6]
+	mi := &file_auth_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -484,7 +493,7 @@ func (x *DeviceConfiguration) String() string {
 func (*DeviceConfiguration) ProtoMessage() {}
 
 func (x *DeviceConfiguration) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[6]
+	mi := &file_auth_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -497,7 +506,7 @@ func (x *DeviceConfiguration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeviceConfiguration.ProtoReflect.Descriptor instead.
 func (*DeviceConfiguration) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{6}
+	return file_auth_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeviceConfiguration) GetAddresses() []string {
@@ -542,7 +551,7 @@ type ServerConfiguration struct {
 
 func (x *ServerConfiguration) Reset() {
 	*x = ServerConfiguration{}
-	mi := &file_proto_auth_proto_msgTypes[7]
+	mi := &file_auth_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -554,7 +563,7 @@ func (x *ServerConfiguration) String() string {
 func (*ServerConfiguration) ProtoMessage() {}
 
 func (x *ServerConfiguration) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[7]
+	mi := &file_auth_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -567,7 +576,7 @@ func (x *ServerConfiguration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerConfiguration.ProtoReflect.Descriptor instead.
 func (*ServerConfiguration) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{7}
+	return file_auth_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ServerConfiguration) GetEndpoint() string {
@@ -617,7 +626,7 @@ type NetworkConfiguration struct {
 
 func (x *NetworkConfiguration) Reset() {
 	*x = NetworkConfiguration{}
-	mi := &file_proto_auth_proto_msgTypes[8]
+	mi := &file_auth_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -629,7 +638,7 @@ func (x *NetworkConfiguration) String() string {
 func (*NetworkConfiguration) ProtoMessage() {}
 
 func (x *NetworkConfiguration) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[8]
+	mi := &file_auth_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -642,7 +651,7 @@ func (x *NetworkConfiguration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkConfiguration.ProtoReflect.Descriptor instead.
 func (*NetworkConfiguration) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{8}
+	return file_auth_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *NetworkConfiguration) GetRoutes() []string {
@@ -679,7 +688,7 @@ type ExitNodeConfiguration struct {
 
 func (x *ExitNodeConfiguration) Reset() {
 	*x = ExitNodeConfiguration{}
-	mi := &file_proto_auth_proto_msgTypes[9]
+	mi := &file_auth_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -691,7 +700,7 @@ func (x *ExitNodeConfiguration) String() string {
 func (*ExitNodeConfiguration) ProtoMessage() {}
 
 func (x *ExitNodeConfiguration) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[9]
+	mi := &file_auth_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -704,7 +713,7 @@ func (x *ExitNodeConfiguration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExitNodeConfiguration.ProtoReflect.Descriptor instead.
 func (*ExitNodeConfiguration) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{9}
+	return file_auth_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ExitNodeConfiguration) GetEnabled() bool {
@@ -745,7 +754,7 @@ type StartDeviceFlowRequest struct {
 
 func (x *StartDeviceFlowRequest) Reset() {
 	*x = StartDeviceFlowRequest{}
-	mi := &file_proto_auth_proto_msgTypes[10]
+	mi := &file_auth_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -757,7 +766,7 @@ func (x *StartDeviceFlowRequest) String() string {
 func (*StartDeviceFlowRequest) ProtoMessage() {}
 
 func (x *StartDeviceFlowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[10]
+	mi := &file_auth_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -770,7 +779,7 @@ func (x *StartDeviceFlowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeviceFlowRequest.ProtoReflect.Descriptor instead.
 func (*StartDeviceFlowRequest) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{10}
+	return file_auth_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StartDeviceFlowRequest) GetDeviceId() string {
@@ -794,7 +803,7 @@ type StartDeviceFlowResponse struct {
 
 func (x *StartDeviceFlowResponse) Reset() {
 	*x = StartDeviceFlowResponse{}
-	mi := &file_proto_auth_proto_msgTypes[11]
+	mi := &file_auth_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -806,7 +815,7 @@ func (x *StartDeviceFlowResponse) String() string {
 func (*StartDeviceFlowResponse) ProtoMessage() {}
 
 func (x *StartDeviceFlowResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[11]
+	mi := &file_auth_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -819,7 +828,7 @@ func (x *StartDeviceFlowResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeviceFlowResponse.ProtoReflect.Descriptor instead.
 func (*StartDeviceFlowResponse) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{11}
+	return file_auth_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StartDeviceFlowResponse) GetDeviceCode() string {
@@ -867,7 +876,7 @@ type PollDeviceFlowRequest struct {
 
 func (x *PollDeviceFlowRequest) Reset() {
 	*x = PollDeviceFlowRequest{}
-	mi := &file_proto_auth_proto_msgTypes[12]
+	mi := &file_auth_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -879,7 +888,7 @@ func (x *PollDeviceFlowRequest) String() string {
 func (*PollDeviceFlowRequest) ProtoMessage() {}
 
 func (x *PollDeviceFlowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[12]
+	mi := &file_auth_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -892,7 +901,7 @@ func (x *PollDeviceFlowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollDeviceFlowRequest.ProtoReflect.Descriptor instead.
 func (*PollDeviceFlowRequest) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{12}
+	return file_auth_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PollDeviceFlowRequest) GetDeviceCode() string {
@@ -912,7 +921,7 @@ type PollDeviceFlowResponse struct {
 
 func (x *PollDeviceFlowResponse) Reset() {
 	*x = PollDeviceFlowResponse{}
-	mi := &file_proto_auth_proto_msgTypes[13]
+	mi := &file_auth_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -924,7 +933,7 @@ func (x *PollDeviceFlowResponse) String() string {
 func (*PollDeviceFlowResponse) ProtoMessage() {}
 
 func (x *PollDeviceFlowResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_auth_proto_msgTypes[13]
+	mi := &file_auth_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -937,7 +946,7 @@ func (x *PollDeviceFlowResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollDeviceFlowResponse.ProtoReflect.Descriptor instead.
 func (*PollDeviceFlowResponse) Descriptor() ([]byte, []int) {
-	return file_proto_auth_proto_rawDescGZIP(), []int{13}
+	return file_auth_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PollDeviceFlowResponse) GetSuccess() bool {
@@ -947,16 +956,18 @@ func (x *PollDeviceFlowResponse) GetSuccess() bool {
 	return false
 }
 
-var File_proto_auth_proto protoreflect.FileDescriptor
+var File_auth_proto protoreflect.FileDescriptor
 
-const file_proto_auth_proto_rawDesc = "" +
+const file_auth_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/auth.proto\x12\x04grpc\"p\n" +
-	"\x15RegisterDeviceRequest\x12\x1b\n" +
-	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\x02 \x01(\tR\tpublicKey\x12\x1b\n" +
-	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"\xee\x02\n" +
+	"auth.proto\x12\x04grpc\"\x83\x01\n" +
+	"\x15RegisterDeviceRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x14\n" +
+	"\x05nonce\x18\x04 \x01(\x03R\x05nonce\x12\x0e\n" +
+	"\x02os\x18\x05 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x06 \x01(\tR\x04arch\x12\x1a\n" +
+	"\bhostname\x18\a \x01(\tR\bhostname\"\x99\x03\n" +
 	"\x16RegisterDeviceResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\x12\x1d\n" +
@@ -973,16 +984,15 @@ const file_proto_auth_proto_rawDesc = "" +
 	"\x03mtu\x18\n" +
 	" \x01(\x05R\x03mtu\x12\x1f\n" +
 	"\vlisten_port\x18\v \x01(\x05R\n" +
-	"listenPort\"H\n" +
-	"\x13RefreshTokenRequest\x12\x1b\n" +
-	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"F\n" +
+	"listenPort\x12)\n" +
+	"\x10encrypted_config\x18\f \x01(\fR\x0fencryptedConfig\"+\n" +
+	"\x13RefreshTokenRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"F\n" +
 	"\x14RefreshTokenResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"L\n" +
-	"\x17GetConfigurationRequest\x12\x1b\n" +
-	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\x95\x03\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"/\n" +
+	"\x17GetConfigurationRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\x95\x03\n" +
 	"\x18GetConfigurationResponse\x12>\n" +
 	"\rdevice_config\x18\x01 \x01(\v2\x19.grpc.DeviceConfigurationR\fdeviceConfig\x12>\n" +
 	"\rserver_config\x18\x02 \x01(\v2\x19.grpc.ServerConfigurationR\fserverConfig\x12A\n" +
@@ -1039,19 +1049,19 @@ const file_proto_auth_proto_rawDesc = "" +
 	"\x0ePollDeviceFlow\x12\x1b.grpc.PollDeviceFlowRequest\x1a\x1c.grpc.PollDeviceFlowResponseB\x1fZ\x1dwantastic-agent/internal/grpcb\x06proto3"
 
 var (
-	file_proto_auth_proto_rawDescOnce sync.Once
-	file_proto_auth_proto_rawDescData []byte
+	file_auth_proto_rawDescOnce sync.Once
+	file_auth_proto_rawDescData []byte
 )
 
-func file_proto_auth_proto_rawDescGZIP() []byte {
-	file_proto_auth_proto_rawDescOnce.Do(func() {
-		file_proto_auth_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_auth_proto_rawDesc), len(file_proto_auth_proto_rawDesc)))
+func file_auth_proto_rawDescGZIP() []byte {
+	file_auth_proto_rawDescOnce.Do(func() {
+		file_auth_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_auth_proto_rawDesc), len(file_auth_proto_rawDesc)))
 	})
-	return file_proto_auth_proto_rawDescData
+	return file_auth_proto_rawDescData
 }
 
-var file_proto_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
-var file_proto_auth_proto_goTypes = []any{
+var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_auth_proto_goTypes = []any{
 	(*RegisterDeviceRequest)(nil),    // 0: grpc.RegisterDeviceRequest
 	(*RegisterDeviceResponse)(nil),   // 1: grpc.RegisterDeviceResponse
 	(*RefreshTokenRequest)(nil),      // 2: grpc.RefreshTokenRequest
@@ -1067,7 +1077,7 @@ var file_proto_auth_proto_goTypes = []any{
 	(*PollDeviceFlowRequest)(nil),    // 12: grpc.PollDeviceFlowRequest
 	(*PollDeviceFlowResponse)(nil),   // 13: grpc.PollDeviceFlowResponse
 }
-var file_proto_auth_proto_depIdxs = []int32{
+var file_auth_proto_depIdxs = []int32{
 	6,  // 0: grpc.GetConfigurationResponse.device_config:type_name -> grpc.DeviceConfiguration
 	7,  // 1: grpc.GetConfigurationResponse.server_config:type_name -> grpc.ServerConfiguration
 	8,  // 2: grpc.GetConfigurationResponse.network_config:type_name -> grpc.NetworkConfiguration
@@ -1089,26 +1099,26 @@ var file_proto_auth_proto_depIdxs = []int32{
 	0,  // [0:4] is the sub-list for field type_name
 }
 
-func init() { file_proto_auth_proto_init() }
-func file_proto_auth_proto_init() {
-	if File_proto_auth_proto != nil {
+func init() { file_auth_proto_init() }
+func file_auth_proto_init() {
+	if File_auth_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_auth_proto_rawDesc), len(file_proto_auth_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_proto_rawDesc), len(file_auth_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_auth_proto_goTypes,
-		DependencyIndexes: file_proto_auth_proto_depIdxs,
-		MessageInfos:      file_proto_auth_proto_msgTypes,
+		GoTypes:           file_auth_proto_goTypes,
+		DependencyIndexes: file_auth_proto_depIdxs,
+		MessageInfos:      file_auth_proto_msgTypes,
 	}.Build()
-	File_proto_auth_proto = out.File
-	file_proto_auth_proto_goTypes = nil
-	file_proto_auth_proto_depIdxs = nil
+	File_auth_proto = out.File
+	file_auth_proto_goTypes = nil
+	file_auth_proto_depIdxs = nil
 }

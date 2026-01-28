@@ -14,7 +14,7 @@ import (
 	"unsafe"
 
 	"wantastic-agent/internal/config"
-	"wantastic-agent/internal/grpc"
+	pb "wantastic-agent/internal/grpc/proto"
 
 	virtstack "golang.zx2c4.com/wireguard/tun/netstack"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -349,7 +349,7 @@ func (ns *Netstack) tuneForMacOS(netInst *virtstack.Net) {
 	})
 }
 
-func (ns *Netstack) UpdateNetworkConfig(config *grpc.NetworkConfiguration) error {
+func (ns *Netstack) UpdateNetworkConfig(config *pb.NetworkConfiguration) error {
 	return nil
 }
 

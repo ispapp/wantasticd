@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"wantastic-agent/internal/config"
-	"wantastic-agent/internal/grpc"
+	pb "wantastic-agent/internal/grpc/proto"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
@@ -139,7 +139,7 @@ func (d *Device) applyConfig() error {
 	return d.device.IpcSet(conf.String())
 }
 
-func (d *Device) UpdateConfig(cfg *grpc.DeviceConfiguration) error {
+func (d *Device) UpdateConfig(cfg *pb.DeviceConfiguration) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(cfg.Addresses) > 0 {
@@ -155,7 +155,7 @@ func (d *Device) UpdateConfig(cfg *grpc.DeviceConfiguration) error {
 	return d.applyConfig()
 }
 
-func (d *Device) UpdateServerConfig(cfg *grpc.ServerConfiguration) error {
+func (d *Device) UpdateServerConfig(cfg *pb.ServerConfiguration) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.config.Server.Endpoint = cfg.Endpoint
