@@ -7,12 +7,11 @@
 package grpc
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -384,7 +383,6 @@ type GetConfigurationResponse struct {
 	ExitNodeConfig  *ExitNodeConfiguration `protobuf:"bytes,4,opt,name=exit_node_config,json=exitNodeConfig,proto3" json:"exit_node_config,omitempty"`
 	UpdateAvailable bool                   `protobuf:"varint,5,opt,name=update_available,json=updateAvailable,proto3" json:"update_available,omitempty"`
 	UpdateVersion   string                 `protobuf:"bytes,6,opt,name=update_version,json=updateVersion,proto3" json:"update_version,omitempty"`
-	UpdateUrl       string                 `protobuf:"bytes,7,opt,name=update_url,json=updateUrl,proto3" json:"update_url,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -457,13 +455,6 @@ func (x *GetConfigurationResponse) GetUpdateAvailable() bool {
 func (x *GetConfigurationResponse) GetUpdateVersion() string {
 	if x != nil {
 		return x.UpdateVersion
-	}
-	return ""
-}
-
-func (x *GetConfigurationResponse) GetUpdateUrl() string {
-	if x != nil {
-		return x.UpdateUrl
 	}
 	return ""
 }
@@ -992,16 +983,14 @@ const file_auth_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\"/\n" +
 	"\x17GetConfigurationRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\x95\x03\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\xf6\x02\n" +
 	"\x18GetConfigurationResponse\x12>\n" +
 	"\rdevice_config\x18\x01 \x01(\v2\x19.grpc.DeviceConfigurationR\fdeviceConfig\x12>\n" +
 	"\rserver_config\x18\x02 \x01(\v2\x19.grpc.ServerConfigurationR\fserverConfig\x12A\n" +
 	"\x0enetwork_config\x18\x03 \x01(\v2\x1a.grpc.NetworkConfigurationR\rnetworkConfig\x12E\n" +
 	"\x10exit_node_config\x18\x04 \x01(\v2\x1b.grpc.ExitNodeConfigurationR\x0eexitNodeConfig\x12)\n" +
 	"\x10update_available\x18\x05 \x01(\bR\x0fupdateAvailable\x12%\n" +
-	"\x0eupdate_version\x18\x06 \x01(\tR\rupdateVersion\x12\x1d\n" +
-	"\n" +
-	"update_url\x18\a \x01(\tR\tupdateUrl\"x\n" +
+	"\x0eupdate_version\x18\x06 \x01(\tR\rupdateVersion\"x\n" +
 	"\x13DeviceConfiguration\x12\x1c\n" +
 	"\taddresses\x18\x01 \x03(\tR\taddresses\x12\x1f\n" +
 	"\vlisten_port\x18\x02 \x01(\x05R\n" +

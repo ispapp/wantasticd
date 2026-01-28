@@ -15,6 +15,7 @@ import (
 
 	"wantastic-agent/internal/device"
 	agent_netstack "wantastic-agent/internal/netstack"
+	"wantastic-agent/pkg/version"
 
 	"golang.org/x/sys/cpu"
 )
@@ -343,7 +344,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			"/health":  "Health check endpoint",
 			"/view":    "HTML statistics dashboard",
 		},
-		"version": "1.0.0",
+		"version": version.Version,
 	})
 }
 
@@ -400,7 +401,7 @@ func (s *Server) collectMetrics() Metrics {
 	// Agent metrics
 	// Agent metrics (Host Uptime)
 	m.Agent.Uptime = formatUptimeDuration(getHostUptime())
-	m.Agent.Version = "1.0.0"
+	m.Agent.Version = version.Version
 	m.Agent.Status = "running"
 
 	// Mesh Statistics (Linux embedded only)

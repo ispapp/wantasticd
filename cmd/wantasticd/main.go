@@ -24,10 +24,7 @@ import (
 
 	"wantastic-agent/internal/agent"
 	"wantastic-agent/internal/config"
-)
-
-var (
-	version = "1.0.0" // Build-time version injection
+	"wantastic-agent/pkg/version"
 )
 
 func main() {
@@ -187,25 +184,25 @@ func runAgent(configPath string, verbose bool) {
 }
 
 func printVersion() {
-	fmt.Printf("wantasticd version %s\n", version)
+	fmt.Printf("wantasticd version %s\n", version.Version)
 }
 
 func handleUpdate() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	mgr := update.NewManager(version)
+	mgr := update.NewManager(version.Version)
 	latest, err := mgr.FetchLatestVersion(ctx)
 	if err != nil {
 		log.Fatalf("Failed to fetch latest version: %v", err)
 	}
 
-	if latest == version {
-		fmt.Printf("Already running latest version: %s\n", version)
+	if latest == version.Version {
+		fmt.Printf("Already running latest version: %s\n", version.Version)
 		return
 	}
 
-	fmt.Printf("Updating from %s to %s...\n", version, latest)
+	fmt.Printf("Updating from %s to %s...\n", version.Version, latest)
 	if err := mgr.RunUpdateScript(ctx, latest); err != nil {
 		log.Fatalf("Update failed: %v", err)
 	}

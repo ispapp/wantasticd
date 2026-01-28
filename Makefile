@@ -2,7 +2,11 @@
 
 # Go parameters
 GOCMD=go
-GOBUILD=$(GOCMD) build -ldflags="-s -w"
+VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+DATE?=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
+LDFLAGS="-s -w -X wantastic-agent/pkg/version.Version=$(VERSION) -X wantastic-agent/pkg/version.Commit=$(COMMIT) -X wantastic-agent/pkg/version.BuildDate=$(DATE)"
+GOBUILD=$(GOCMD) build -ldflags=$(LDFLAGS)
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get

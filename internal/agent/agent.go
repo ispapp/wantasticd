@@ -15,6 +15,7 @@ import (
 	pb "wantastic-agent/internal/grpc/proto"
 	"wantastic-agent/internal/ipc"
 	"wantastic-agent/internal/netstack"
+	"wantastic-agent/pkg/version"
 )
 
 // Agent represents the main agent that manages the WireGuard device, netstack, and gRPC communication
@@ -61,10 +62,10 @@ func NewWithClient(cfg *config.Config, client *grpc.Client) (*Agent, error) {
 	// Hook up JIT Port Forwarding
 	dev.PortForwarder = ns.EnsurePortForward
 
-	updater := update.NewManager("1.0.0") // TODO: Get version from build
+	updater := update.NewManager(version.Version)
 
 	// Initialize stats server
-	statsServer := stats.NewServer(dev, ns, "1.0.0")
+	statsServer := stats.NewServer(dev, ns, version.Version)
 
 	ipcServer := ipc.NewServer(ns)
 

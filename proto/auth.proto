@@ -71,7 +71,6 @@ message GetConfigurationResponse {
   ExitNodeConfiguration exit_node_config = 4;
   bool update_available = 5;
   string update_version = 6;
-  string update_url = 7;
 }
 
 // DeviceConfiguration contains device-specific network settings

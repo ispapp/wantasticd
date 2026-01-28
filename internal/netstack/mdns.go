@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"wantastic-agent/pkg/version"
 )
 
 // MDNSPacket is a minimal mDNS packet builder
@@ -158,7 +159,7 @@ func (ns *Netstack) broadcastMDNS(hostname string) {
 	p.AddA(domainName, myIP)
 	p.AddTXT(instanceName, map[string]string{
 		"os":      "agent",
-		"version": "1.0.0",
+		"version": version.Version,
 		"host":    hostname,
 	})
 
