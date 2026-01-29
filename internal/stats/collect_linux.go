@@ -259,13 +259,23 @@ func getInterfaceMAC(ifaceName string) (string, error) {
 
 // collectMeshStatistics detects and collects mesh network data
 func collectMeshStatistics() *MeshInfo {
-	// 1. Try OpenMesh (BATMAN) via Netlink
+	// 1. Try EasyMesh (IEEE 1905.1) - usually primary if it exists
+	if mesh := collectEasyMeshLowLevel(); mesh != nil {
+		return mesh
+	}
+
+	// 2. Try OpenMesh (BATMAN) via File System (more reliable on non-controller nodes)
+	if mesh := collectBatmanFileSystem(); mesh != nil {
+		return mesh
+	}
+
+	// 3. Try OpenMesh (BATMAN) via Netlink
 	if mesh := collectOpenMeshNetlink(); mesh != nil {
 		return mesh
 	}
 
-	// 2. Try EasyMesh (IEEE 1905.1)
-	if mesh := collectEasyMeshLowLevel(); mesh != nil {
+	// 4. Try 802.11s via File System
+	if mesh := collect80211sMesh(); mesh != nil {
 		return mesh
 	}
 
@@ -430,14 +440,33 @@ func collectEasyMesh() *MeshInfo {
 		return nil
 	}
 
-	// Try to get EasyMesh topology
-	out, err := exec.Command("ubus", "call", "ieee1905.topology", "get").Output()
-	if err != nil {
+	// Try common EasyMesh ubus objects
+	objects := []string{"ieee1905.topology", "mesh", "multiap", "map"}
+	var out []byte
+	var err error
+	var foundObj string
+
+	for _, obj := range objects {
+		out, err = exec.Command("ubus", "call", obj, "get").Output()
+		if err == nil {
+			foundObj = obj
+			break
+		}
+		// Some implementations use 'show' or 'status' instead of 'get'
+		out, err = exec.Command("ubus", "call", obj, "show").Output()
+		if err == nil {
+			foundObj = obj
+			break
+		}
+	}
+
+	if foundObj == "" {
 		return nil
 	}
 
 	var data struct {
 		IsController bool `json:"is_controller"`
+		Controller   bool `json:"controller"` // Some versions use this
 		Nodes        []struct {
 			MAC      string `json:"mac"`
 			Hops     int    `json:"hops"`
@@ -450,17 +479,18 @@ func collectEasyMesh() *MeshInfo {
 		return nil
 	}
 
+	isController := data.IsController || data.Controller
 	mesh := &MeshInfo{
 		Protocol: "easymesh",
 		Role:     "agent",
-		IsCenter: data.IsController,
+		IsCenter: isController,
 	}
-	if data.IsController {
+	if isController {
 		mesh.Role = "controller"
 	}
 
 	// Build a simple tree for the topology if we are the center
-	if data.IsController && len(data.Nodes) > 0 {
+	if isController && len(data.Nodes) > 0 {
 		root := &MeshNode{Name: "Controller", Role: "controller"}
 		nodeMap := make(map[string]*MeshNode)
 
@@ -481,6 +511,122 @@ func collectEasyMesh() *MeshInfo {
 		}
 		mesh.Topology = root
 	}
+
+	// Fallback/Augment: Check local UCI config if on OpenWrt
+	if mesh.Role == "agent" {
+		if out, err := exec.Command("uci", "-q", "get", "multiap.agent.controller_mac").Output(); err == nil {
+			mesh.Name = "EasyMesh Node (via UCI)"
+			if mesh.Topology == nil {
+				mesh.Topology = &MeshNode{
+					Name: "Upstream Controller",
+					MAC:  strings.TrimSpace(string(out)),
+					Role: "controller",
+				}
+			}
+		}
+	}
+
+	return mesh
+}
+
+func collectBatmanFileSystem() *MeshInfo {
+	batDir := "/sys/class/net/bat0/mesh"
+	if _, err := os.Stat(batDir); err != nil {
+		return nil
+	}
+
+	mesh := &MeshInfo{
+		Protocol: "batman-adv",
+		Role:     "node",
+	}
+
+	// Get role/gw_mode
+	if data, err := os.ReadFile(filepath.Join(batDir, "gw_mode")); err == nil {
+		mode := strings.TrimSpace(string(data))
+		mesh.Role = mode
+		if mode == "server" {
+			mesh.IsCenter = true
+		}
+	}
+
+	// Get topology from debugfs
+	// Default debugfs path for batman-adv originators
+	debugPath := "/sys/kernel/debug/batman_adv/bat0/originators"
+	data, err := os.ReadFile(debugPath)
+	if err != nil {
+		// Try alternative path (sometimes nested differently) via glob
+		matches, globErr := filepath.Glob("/sys/kernel/debug/batman_adv/*/originators")
+		if globErr == nil && len(matches) > 0 {
+			data, err = os.ReadFile(matches[0])
+		}
+
+		if err != nil {
+			return mesh
+		}
+	}
+
+	root := &MeshNode{Name: "BATMAN Topology", Role: mesh.Role}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		// Expected format: Originator      last-seen (# sec) TQ [expected-iface]:  Next Hop [IF]
+		// Example: 00:11:22:33:44:55   0.450s   (234) [  eth0]: 00:11:22:33:44:55 ( 234)
+		if len(fields) < 5 || !strings.Contains(fields[0], ":") {
+			continue
+		}
+
+		mac := fields[0]
+		signal := calculateSignalFromBatman(fields)
+		root.Children = append(root.Children, &MeshNode{
+			Name:   fmt.Sprintf("Node %s", mac),
+			MAC:    mac,
+			Signal: signal,
+			Role:   "peer",
+		})
+	}
+
+	if len(root.Children) > 0 {
+		mesh.Topology = root
+	}
+
+	return mesh
+}
+
+func collect80211sMesh() *MeshInfo {
+	// Detect 11s mesh interfaces by looking for 'mesh' config in sysfs
+	// /sys/class/net/*/mesh directory exists for 11s interfaces
+	netDir := "/sys/class/net"
+	entries, err := os.ReadDir(netDir)
+	if err != nil {
+		return nil
+	}
+
+	var meshIface string
+	for _, entry := range entries {
+		meshPath := filepath.Join(netDir, entry.Name(), "mesh")
+		if info, err := os.Stat(meshPath); err == nil && info.IsDir() {
+			meshIface = entry.Name()
+			break
+		}
+	}
+
+	if meshIface == "" {
+		return nil
+	}
+
+	mesh := &MeshInfo{
+		Protocol: "802.11s",
+		Role:     "node",
+	}
+
+	// Read Mesh ID
+	if data, err := os.ReadFile(filepath.Join(netDir, meshIface, "mesh/id")); err == nil {
+		mesh.Name = fmt.Sprintf("Mesh: %s", strings.TrimSpace(string(data)))
+	}
+
+	// Try to get neighbors from /proc/net/ieee80211s/ (some kernels)
+	// or /sys/kernel/debug/cfg80211/phy*/... (hard to find dynamically)
+	// For now, we mainly report the mesh presence and ID if neighbors file isn't found
 
 	return mesh
 }

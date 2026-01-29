@@ -18,6 +18,7 @@ require (
 )
 
 require (
+	github.com/adrianmo/go-nmea v1.10.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect

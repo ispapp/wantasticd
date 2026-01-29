@@ -85,6 +85,12 @@ type Metrics struct {
 		Status  string `json:"status"`
 	} `json:"agent"`
 
+	// Modem metrics (for LTE/5G devices)
+	Modem *ModemInfo `json:"modem,omitempty"`
+
+	// GPS metrics
+	GPS *GPSInfo `json:"gps,omitempty"`
+
 	// Mesh metrics (for Linux embedded devices)
 	Mesh *MeshInfo `json:"mesh,omitempty"`
 }
@@ -143,6 +149,7 @@ type TrafficStats struct {
 
 // MeshInfo represents mesh network information
 type MeshInfo struct {
+	Name     string    `json:"name,omitempty"`
 	Protocol string    `json:"protocol"` // "easymesh", "openmesh", etc
 	Role     string    `json:"role"`     // "controller", "agent", etc
 	IsCenter bool      `json:"is_center"`
@@ -157,6 +164,30 @@ type MeshNode struct {
 	Signal   int         `json:"signal,omitempty"`
 	Role     string      `json:"role,omitempty"`
 	Children []*MeshNode `json:"children,omitempty"`
+}
+
+// ModemInfo represents LTE/5G modem details
+type ModemInfo struct {
+	Model        string `json:"model"`
+	IMEI         string `json:"imei"`
+	IMSI         string `json:"imsi"`
+	PhoneNumber  string `json:"phone_number"`
+	SIMSlot      string `json:"sim_slot"`
+	Signal       int    `json:"signal"`       // CSQ or dBm
+	Registration string `json:"registration"` // e.g., "Home", "Roaming"
+	Operator     string `json:"operator"`
+	Tech         string `json:"tech"` // LTE, NR5G, etc.
+}
+
+// GPSInfo represents GNSS location details
+type GPSInfo struct {
+	Lat        float64   `json:"lat"`
+	Lon        float64   `json:"lon"`
+	Alt        float64   `json:"alt"`
+	Speed      float64   `json:"speed"`
+	Satellites int       `json:"satellites"`
+	Fix        string    `json:"fix"` // "none", "2D", "3D"
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // NewServer creates a new stats server instance
@@ -186,7 +217,7 @@ func NewServer(device *device.Device, ns *agent_netstack.Netstack, version strin
 	mux.HandleFunc("/", s.handleRoot)
 
 	s.server = &http.Server{
-		Addr:    ":9034",
+		Addr:    "127.0.0.1:9034",
 		Handler: mux,
 	}
 
@@ -334,18 +365,59 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRoot returns API information
+// handleRoot returns a simple HTML landing page with a menu
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"api": "wantastic-agent stats server",
-		"endpoints": map[string]string{
-			"/metrics": "Device metrics and statistics",
-			"/health":  "Health check endpoint",
-			"/view":    "HTML statistics dashboard",
-		},
-		"version": version.Version,
-	})
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Wantastic Agent Stats</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f3f3f3;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .menu {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        h1 { color: #0078d4; margin-bottom: 30px; }
+        .btn {
+            display: block;
+            width: 200px;
+            margin: 15px auto;
+            padding: 12px;
+            background: #0078d4;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            transition: background 0.2s;
+            font-weight: 500;
+        }
+        .btn:hover { background: #005a9e; }
+        .footer { margin-top: 20px; font-size: 0.8em; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="menu">
+        <h1>Wantastic Agent</h1>
+        <a href="/metrics" class="btn">API (JSON)</a>
+        <a href="/view" class="btn">View Dashboard</a>
+        <a href="/health" class="btn">Health Status</a>
+        <div class="footer">Version: %s</div>
+    </div>
+</body>
+</html>
+`, version.Version)
 }
 
 // collectMetrics gathers comprehensive device metrics
@@ -406,6 +478,12 @@ func (s *Server) collectMetrics() Metrics {
 
 	// Mesh Statistics (Linux embedded only)
 	m.Mesh = collectMeshStatistics()
+
+	// Modem Statistics
+	m.Modem = collectModemStatistics()
+
+	// GPS Statistics
+	m.GPS = collectGPSStatistics()
 
 	return m
 }
