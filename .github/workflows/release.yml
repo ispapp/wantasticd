@@ -60,7 +60,7 @@ jobs:
         export GOOS=${{ matrix.goos }}
         export GOARCH=${{ matrix.goarch }}
         export CGO_ENABLED=0
-        go build -v -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o wantasticd-${{ matrix.goarch }} ./cmd/wantasticd
+        go build -v -trimpath -ldflags="-s -w -X wantastic-agent/pkg/version.Version=${{ github.ref_name }}+$(git rev-parse --short HEAD) -X wantastic-agent/pkg/version.Commit=$(git rev-parse --short HEAD) -X wantastic-agent/pkg/version.BuildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -o wantasticd-${{ matrix.goarch }} ./cmd/wantasticd
 
     - name: Package
       run: |
@@ -72,7 +72,7 @@ jobs:
 
 
     - name: Create Version File
-      run: echo "${{ github.ref_name }}" > latest
+      run: echo "${{ github.ref_name }}+$(git rev-parse --short HEAD)" > latest
 
     - name: Upload Release Asset
       run: |
@@ -115,7 +115,7 @@ jobs:
       run: |
         mkdir -p root_upload
         cp install.sh root_upload/
-        echo "${{ github.ref_name }}" > root_upload/latest
+        echo "${{ github.ref_name }}+$(git rev-parse --short HEAD)" > root_upload/latest
 
     - name: Upload Root Artifacts to R2
       uses: ryand56/r2-upload-action@latest
