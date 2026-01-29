@@ -50,3 +50,43 @@ func LoadClientTLSCredentials() (credentials.TransportCredentials, error) {
 
 	return credentials.NewTLS(config), nil
 }
+
+// LoadServerTLSCredentials loads the mTLS credentials for the server.
+func LoadServerTLSCredentials() (credentials.TransportCredentials, error) {
+	// Load CA certificate for client verification
+	caCert, err := fs.ReadFile("ca.crt")
+	if err != nil {
+		return nil, fmt.Errorf("read ca cert: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to append ca cert")
+	}
+
+	// For the demo server, we'll reuse the same certificates
+	// In a real scenario, use server.crt and server.key
+	serverCert, err := fs.ReadFile("client.crt")
+	if err != nil {
+		return nil, fmt.Errorf("read server cert: %w", err)
+	}
+
+	serverKey, err := fs.ReadFile("client.key")
+	if err != nil {
+		return nil, fmt.Errorf("read server key: %w", err)
+	}
+
+	cert, err := tls.X509KeyPair(serverCert, serverKey)
+	if err != nil {
+		return nil, fmt.Errorf("load x509 key pair: %w", err)
+	}
+
+	// Create TLS configuration
+	config := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    caCertPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	return credentials.NewTLS(config), nil
+}

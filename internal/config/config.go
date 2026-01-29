@@ -252,11 +252,40 @@ func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) 
 		return nil, fmt.Errorf("start device flow: %w", err)
 	}
 
-	cfg := &Config{}
-	if err := cfg.UpdateFromGRPC(resp); err != nil {
-		return nil, fmt.Errorf("update config from grpc: %w", err)
+	// The updated StartDeviceFlow returns a RegisterDeviceResponse
+	// We can use the SAME LOGIC as LoadFromToken to process it
+	if !resp.Success {
+		return nil, fmt.Errorf("registration failed")
 	}
 
+	// Fallback to raw fields (LoadFromToken also does this now)
+	cfg := &Config{
+		Server: Server{
+			Endpoint:            resp.Endpoint,
+			PublicKey:           resp.ServerKey,
+			AllowedIPs:          resp.AllowedIps,
+			PersistentKeepalive: int(resp.PersistentKeepalive),
+		},
+		Interface: Interface{
+			MTU:        int(resp.Mtu),
+			ListenPort: int(resp.ListenPort),
+			DNS:        resp.DnsServers,
+		},
+	}
+	cfg.Auth.ServerURL = serverURL
+	// Use new token if provided, otherwise keep existing enrollment token
+	if resp.Token != "" {
+		cfg.Auth.Token = resp.Token
+	}
+
+	// Parse routes
+	for _, route := range resp.Routes {
+		if prefix, err := netip.ParsePrefix(route); err == nil {
+			cfg.Interface.Addresses = append(cfg.Interface.Addresses, prefix)
+		}
+	}
+
+	cfg.GenerateDeviceID()
 	return cfg, nil
 }
 
@@ -290,16 +319,13 @@ func LoadFromToken(ctx context.Context, serverURL, token string) (*Config, error
 		return nil, fmt.Errorf("registration failed")
 	}
 
-	// Decrypt configuration if provided
+	// 3. Handle response (Prefer EncryptedConfig, fallback to raw fields)
 	if len(resp.EncryptedConfig) > 0 {
 		// Derive key from token: Key = SHA256(Token)
 		hash := sha256.Sum256([]byte(token))
 		key := hash[:]
 
-		// Construct Nonce
-		// ChaCha20Poly1305 requires a 12-byte nonce.
-		// We have an 8-byte int64 nonce (nonce).
-		// We pad it with zeros to 12 bytes.
+		// Construct Nonce (12 bytes, first 8 from nonce)
 		nonceBytes := make([]byte, 12)
 		binary.LittleEndian.PutUint64(nonceBytes[:8], uint64(nonce))
 
@@ -315,25 +341,46 @@ func LoadFromToken(ctx context.Context, serverURL, token string) (*Config, error
 			return nil, fmt.Errorf("decrypt config: %w", err)
 		}
 
-		// The decrypted content is a traditional WireGuard config file (INI format)
-		configData := string(decrypted)
-
-		cfgStruct, err := parseTraditionalWireGuardConfig(configData)
+		// Parse decrypted config
+		cfgStruct, err := parseTraditionalWireGuardConfig(string(decrypted))
 		if err != nil {
 			return nil, fmt.Errorf("parse decrypted config: %w", err)
 		}
 
 		cfg := &cfgStruct
 		cfg.Auth.ServerURL = serverURL
-		cfg.Auth.Token = resp.Token // Use potentially new token
-
-		// Ensure DeviceID is set
+		cfg.Auth.Token = resp.Token
 		cfg.GenerateDeviceID()
-
 		return cfg, nil
 	}
 
-	return nil, fmt.Errorf("no encrypted configuration received")
+	// Fallback: Use raw fields from response
+	log.Println("⚠️  No encrypted configuration received, using raw fields")
+	cfg := &Config{
+		Server: Server{
+			Endpoint:            resp.Endpoint,
+			PublicKey:           resp.ServerKey,
+			AllowedIPs:          resp.AllowedIps,
+			PersistentKeepalive: int(resp.PersistentKeepalive),
+		},
+		Interface: Interface{
+			MTU:        int(resp.Mtu),
+			ListenPort: int(resp.ListenPort),
+			DNS:        resp.DnsServers,
+		},
+	}
+	cfg.Auth.ServerURL = serverURL
+	cfg.Auth.Token = resp.Token
+
+	// Parse routes if available
+	for _, route := range resp.Routes {
+		if prefix, err := netip.ParsePrefix(route); err == nil {
+			cfg.Interface.Addresses = append(cfg.Interface.Addresses, prefix)
+		}
+	}
+
+	cfg.GenerateDeviceID()
+	return cfg, nil
 }
 
 // Validate validates the configuration.

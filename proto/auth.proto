@@ -127,4 +127,5 @@ message PollDeviceFlowRequest {
 // PollDeviceFlowResponse indicates device flow completion status
 message PollDeviceFlowResponse {
   bool success = 1;
+  string token = 2; // Token needed for GetConfiguration
 }

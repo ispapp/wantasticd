@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
 	"sync"
 	"time"
 	"wantastic-agent/internal/certs"
@@ -49,18 +51,14 @@ func (c *Client) connect() error {
 	}
 	c.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Load mTLS credentials
 	creds, err := certs.LoadClientTLSCredentials()
 	if err != nil {
 		return fmt.Errorf("load tls credentials: %w", err)
 	}
 
-	conn, err := grpc.DialContext(ctx, c.serverURL,
-		grpc.WithTransportCredentials(creds),
-		grpc.WithBlock())
+	conn, err := grpc.NewClient(c.serverURL,
+		grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return fmt.Errorf("dial auth server: %w", err)
 	}
@@ -167,24 +165,29 @@ func (c *Client) GetConfiguration(ctx context.Context) (*pb.GetConfigurationResp
 	return resp, nil
 }
 
-func (c *Client) StartDeviceFlow(ctx context.Context) (*pb.GetConfigurationResponse, error) {
+func (c *Client) StartDeviceFlow(ctx context.Context) (*pb.RegisterDeviceResponse, error) {
 	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
+	client := c.client
+	c.mu.RUnlock()
+
+	if client == nil {
 		return nil, fmt.Errorf("not connected to auth server")
 	}
-	c.mu.RUnlock()
 
 	req := &pb.StartDeviceFlowRequest{
 		DeviceId: c.deviceID,
 	}
 
-	resp, err := c.client.StartDeviceFlow(ctx, req)
+	resp, err := client.StartDeviceFlow(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("start device flow: %w", err)
 	}
 
-	fmt.Printf("Please go to %s and enter the code: %s\n", resp.VerificationUri, resp.UserCode)
+	fmt.Printf("\n🚀 Device Authorization Required\n")
+	fmt.Printf("-------------------------------\n")
+	fmt.Printf("1. Open: %s\n", resp.VerificationUri)
+	fmt.Printf("2. Enter Code: %s\n\n", resp.UserCode)
+	log.Println("Waiting for authorization...")
 
 	ticker := time.NewTicker(time.Duration(resp.Interval) * time.Second)
 	defer ticker.Stop()
@@ -197,13 +200,20 @@ func (c *Client) StartDeviceFlow(ctx context.Context) (*pb.GetConfigurationRespo
 			pollReq := &pb.PollDeviceFlowRequest{
 				DeviceCode: resp.DeviceCode,
 			}
-			pollResp, err := c.client.PollDeviceFlow(ctx, pollReq)
+			pollResp, err := client.PollDeviceFlow(ctx, pollReq)
 			if err != nil {
-				// TODO: Handle transient errors
 				continue
 			}
 			if pollResp.Success {
-				return c.GetConfiguration(ctx)
+				c.mu.Lock()
+				c.token = pollResp.Token
+				c.mu.Unlock()
+
+				log.Println("✅ Authorization successful! Registering device...")
+
+				// Gather system information for registration
+				hostname, _ := os.Hostname()
+				return c.RegisterDevice(ctx, time.Now().UnixNano(), runtime.GOOS, runtime.GOARCH, hostname)
 			}
 		case <-timeout:
 			return nil, fmt.Errorf("device flow timed out")
