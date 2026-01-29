@@ -50,6 +50,7 @@ func queryGPS(network, address string) *GPSInfo {
 		return nil
 	}
 	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 	return parseNMEA(conn)
 }

@@ -3,6 +3,7 @@
 package stats
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mdlayher/genetlink"
 	"github.com/mdlayher/netlink"
@@ -133,8 +135,11 @@ func parseProcNetWireless() map[string]int {
 }
 
 func collectNearbyNetworks(iface string) ([]NearbyNetwork, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	// Try 'iw dev <iface> scan dump'
-	out, err := exec.Command("iw", "dev", iface, "scan", "dump").Output()
+	out, err := exec.CommandContext(ctx, "iw", "dev", iface, "scan", "dump").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -446,14 +451,17 @@ func collectEasyMesh() *MeshInfo {
 	var err error
 	var foundObj string
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	for _, obj := range objects {
-		out, err = exec.Command("ubus", "call", obj, "get").Output()
+		out, err = exec.CommandContext(ctx, "ubus", "call", obj, "get").Output()
 		if err == nil {
 			foundObj = obj
 			break
 		}
 		// Some implementations use 'show' or 'status' instead of 'get'
-		out, err = exec.Command("ubus", "call", obj, "show").Output()
+		out, err = exec.CommandContext(ctx, "ubus", "call", obj, "show").Output()
 		if err == nil {
 			foundObj = obj
 			break
@@ -514,7 +522,9 @@ func collectEasyMesh() *MeshInfo {
 
 	// Fallback/Augment: Check local UCI config if on OpenWrt
 	if mesh.Role == "agent" {
-		if out, err := exec.Command("uci", "-q", "get", "multiap.agent.controller_mac").Output(); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "uci", "-q", "get", "multiap.agent.controller_mac").Output(); err == nil {
 			mesh.Name = "EasyMesh Node (via UCI)"
 			if mesh.Topology == nil {
 				mesh.Topology = &MeshNode{

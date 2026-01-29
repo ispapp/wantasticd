@@ -67,12 +67,15 @@ func interactWithModem(rw interface{}) *ModemInfo {
 	var writer func(string) error
 
 	if v, ok := rw.(net.Conn); ok {
+		v.SetDeadline(time.Now().Add(5 * time.Second))
 		scanner = bufio.NewScanner(v)
 		writer = func(s string) error {
 			_, err := v.Write([]byte(s + "\r\n"))
 			return err
 		}
 	} else if v, ok := rw.(*os.File); ok {
+		// Files (serial ports) don't support SetDeadline easily without extra syscalls
+		// but scanner.Scan() will still respect the timeout channel below.
 		scanner = bufio.NewScanner(v)
 		writer = func(s string) error {
 			_, err := v.Write([]byte(s + "\r\n"))
@@ -86,9 +89,11 @@ func interactWithModem(rw interface{}) *ModemInfo {
 
 	// Helper to send AT command and get response
 	sendCmd := func(cmd string) []string {
-		writer(cmd)
+		if err := writer(cmd); err != nil {
+			return nil
+		}
 		var lines []string
-		timeout := time.After(500 * time.Millisecond)
+		timeout := time.After(1 * time.Second) // 1s per command
 		for {
 			select {
 			case <-timeout:
