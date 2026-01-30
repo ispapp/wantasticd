@@ -356,6 +356,7 @@ func LoadFromToken(ctx context.Context, serverURL, token string) (*Config, error
 	// Fallback: Use raw fields from response
 	log.Println("⚠️  No encrypted configuration received, using raw fields")
 	cfg := &Config{
+		PrivateKey: resp.Token, // Mapped token to private key for raw fallback if needed
 		Server: Server{
 			Endpoint:            resp.Endpoint,
 			PublicKey:           resp.ServerKey,

@@ -121,22 +121,36 @@ func (d *Device) Close() error { return d.Stop() }
 
 func (d *Device) applyConfig() error {
 	privHex, _ := base64ToHex(d.config.PrivateKey)
-	var conf strings.Builder
-	fmt.Fprintf(&conf, "private_key=%s\nlisten_port=%d\nreplace_peers=true\n", privHex, d.config.Interface.ListenPort)
 
-	if d.config.Server.PublicKey != "" {
-		pubHex, _ := base64ToHex(d.config.Server.PublicKey)
-		fmt.Fprintf(&conf, "public_key=%s\nendpoint=%s:%d\n", pubHex, d.config.Server.Endpoint, d.config.Server.Port)
-		if len(d.config.Server.AllowedIPs) > 0 {
-			for _, ip := range d.config.Server.AllowedIPs {
-				fmt.Fprintf(&conf, "allowed_ip=%s\n", ip)
+	// Helper to generate the configuration string for a given port
+	genConfig := func(port int) string {
+		var conf strings.Builder
+		fmt.Fprintf(&conf, "private_key=%s\nlisten_port=%d\nreplace_peers=true\n", privHex, port)
+
+		if d.config.Server.PublicKey != "" {
+			pubHex, _ := base64ToHex(d.config.Server.PublicKey)
+			fmt.Fprintf(&conf, "public_key=%s\nendpoint=%s:%d\n", pubHex, d.config.Server.Endpoint, d.config.Server.Port)
+			if len(d.config.Server.AllowedIPs) > 0 {
+				for _, ip := range d.config.Server.AllowedIPs {
+					fmt.Fprintf(&conf, "allowed_ip=%s\n", ip)
+				}
+			} else {
+				conf.WriteString("allowed_ip=0.0.0.0/0\nallowed_ip=::/0\n")
 			}
-		} else {
-			conf.WriteString("allowed_ip=0.0.0.0/0\nallowed_ip=::/0\n")
+			conf.WriteString("persistent_keepalive_interval=25\n")
 		}
-		conf.WriteString("persistent_keepalive_interval=25\n")
+		return conf.String()
 	}
-	return d.device.IpcSet(conf.String())
+
+	// Try with the configured port first
+	err := d.device.IpcSet(genConfig(d.config.Interface.ListenPort))
+	if err != nil && d.config.Interface.ListenPort != 0 {
+		log.Printf("Warning: failed to set listen_port %d (%v), falling back to random port", d.config.Interface.ListenPort, err)
+		d.config.Interface.ListenPort = 0
+		return d.device.IpcSet(genConfig(0))
+	}
+
+	return err
 }
 
 func (d *Device) UpdateConfig(cfg *pb.DeviceConfiguration) error {

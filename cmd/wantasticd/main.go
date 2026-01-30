@@ -82,7 +82,7 @@ func handleLogin() {
 		log.Fatalf("Failed to configure agent: %v", err)
 	}
 
-	configPath := "wantasticd.json"
+	configPath := "/etc/wantasticd.json"
 	if err := cfg.SaveToFile(configPath); err != nil {
 		log.Printf("Warning: could not save configuration file: %v", err)
 		log.Println("Running with in-memory configuration only.")
@@ -294,7 +294,7 @@ func getSession(ctx context.Context) (*Session, error) {
 	}
 
 	// 2. Fallback: Ephemeral Agent (if config exists)
-	configPath := "wantasticd.json"
+	configPath := "/etc/wantasticd.json"
 	if _, err := os.Stat(configPath); err == nil {
 		cfg, err := config.LoadFromFile(configPath)
 		if err == nil {
