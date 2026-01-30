@@ -3,8 +3,10 @@ module wantastic-agent
 go 1.24.5
 
 require (
+	github.com/adrianmo/go-nmea v1.10.0
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/google/uuid v1.6.0
+	github.com/kardianos/service v1.2.4
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/mdlayher/wifi v0.3.0
@@ -18,7 +20,6 @@ require (
 )
 
 require (
-	github.com/adrianmo/go-nmea v1.10.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect

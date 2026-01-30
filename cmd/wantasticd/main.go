@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"wantastic-agent/internal/config"
+	"wantastic-agent/internal/daemon"
 	"wantastic-agent/internal/ipc"
 	"wantastic-agent/internal/netagent/curl"
 	"wantastic-agent/internal/netagent/ping"
@@ -23,7 +25,6 @@ import (
 	"wantastic-agent/internal/update"
 
 	"wantastic-agent/internal/agent"
-	"wantastic-agent/internal/config"
 	"wantastic-agent/pkg/version"
 )
 
@@ -64,6 +65,7 @@ func handleLogin() {
 	loginCmd := flag.NewFlagSet("login", flag.ExitOnError)
 	token := loginCmd.String("token", "", "Direct authentication token")
 	serverURL := loginCmd.String("server-url", "auth.wantastic.com:443", "Authentication server URL")
+	installService := loginCmd.Bool("d", false, "Install and run as system service (daemon)")
 	loginCmd.Parse(os.Args[2:])
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,13 +84,42 @@ func handleLogin() {
 		log.Fatalf("Failed to configure agent: %v", err)
 	}
 
-	configPath := "/etc/wantasticd.json"
+	// Default to new standard path
+	configPath := "/etc/wantastic/config.conf"
+	configDir := "/etc/wantastic"
+
+	// If running as non-root/daemon setup request validation
+	if *installService && os.Geteuid() != 0 {
+		log.Printf("Warning: Service installation (-d) requires root privileges.")
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		log.Printf("Warning: failed to create config directory %s: %v", configDir, err)
+		// Fallback to local directory if system directory fails (e.g. non-root)
+		configPath = "wantastic.conf"
+		log.Printf("Falling back to local file: %s", configPath)
+	}
+
 	if err := cfg.SaveToFile(configPath); err != nil {
 		log.Printf("Warning: could not save configuration file: %v", err)
+		if *installService {
+			log.Fatalf("Error: Cannot install service without saving configuration file.")
+		}
 		log.Println("Running with in-memory configuration only.")
 		runAgentWithConfig(cfg)
 	} else {
 		log.Println("Login successful. Configuration saved to", configPath)
+
+		if *installService {
+			log.Println("Setting up system service...")
+			if err := daemon.SetupService(configPath); err != nil {
+				log.Fatalf("Failed to setup service: %v", err)
+			}
+			log.Println("Service installed and started successfully.")
+			return
+		}
+
 		log.Println("Connecting...")
 		runAgent(configPath, false)
 	}
@@ -130,12 +161,31 @@ func handleConnect() {
 	connectCmd := flag.NewFlagSet("connect", flag.ExitOnError)
 	configPath := connectCmd.String("config", "", "Path to configuration file")
 	verbose := connectCmd.Bool("v", false, "Enable verbose logging and debug output")
+	installService := connectCmd.Bool("d", false, "Install and run as system service (daemon)")
 	connectCmd.Parse(os.Args[2:])
 
 	if *configPath == "" {
-		fmt.Fprintf(os.Stderr, "Usage: %s connect -config <path>\n", os.Args[0])
-		connectCmd.PrintDefaults()
-		os.Exit(1)
+		// Use default if not specified
+		*configPath = "/etc/wantastic/config.conf"
+		if _, err := os.Stat(*configPath); os.IsNotExist(err) {
+			// Check for old default for backward compatibility or local fallback
+			altPath := "wantastic.conf"
+			if _, err := os.Stat(altPath); err == nil {
+				*configPath = altPath
+			} else {
+				// If neither exists, and no flag provided, we can't proceed but let's try to load default anyway
+				// and let LoadFromFile error out with a nice message if it fails
+			}
+		}
+	}
+
+	if *installService {
+		log.Println("Setting up system service...")
+		if err := daemon.SetupService(*configPath); err != nil {
+			log.Fatalf("Failed to setup service: %v", err)
+		}
+		log.Println("Service installed and started successfully.")
+		return
 	}
 
 	runAgent(*configPath, *verbose)
