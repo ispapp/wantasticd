@@ -277,7 +277,6 @@ func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) 
 	if resp.Token != "" {
 		cfg.Auth.Token = resp.Token
 	}
-
 	// Parse routes
 	for _, route := range resp.Routes {
 		if prefix, err := netip.ParsePrefix(route); err == nil {

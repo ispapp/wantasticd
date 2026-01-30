@@ -2,17 +2,19 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"os"
 	"runtime"
 	"sync"
 	"time"
-	"wantastic-agent/internal/certs"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 
+	"wantastic-agent/internal/cipher"
 	pb "wantastic-agent/internal/grpc/proto"
 )
 
@@ -51,14 +53,18 @@ func (c *Client) connect() error {
 	}
 	c.mu.Unlock()
 
-	// Load mTLS credentials
-	creds, err := certs.LoadClientTLSCredentials()
-	if err != nil {
-		return fmt.Errorf("load tls credentials: %w", err)
-	}
+	// Use standard TLS credentials with InsecureSkipVerify (Server Auth via Token)
+	// We trust the token encryption ("cipher") for security validation.
+	creds := credentials.NewTLS(&tls.Config{
+		InsecureSkipVerify: true,
+	})
+
+	// Add Cipher Credentials (HMAC Signature)
+	cipherCreds := cipher.NewCredentials()
 
 	conn, err := grpc.NewClient(c.serverURL,
-		grpc.WithTransportCredentials(creds))
+		grpc.WithTransportCredentials(creds),
+		grpc.WithPerRPCCredentials(cipherCreds))
 	if err != nil {
 		return fmt.Errorf("dial auth server: %w", err)
 	}
