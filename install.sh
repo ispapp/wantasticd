@@ -15,6 +15,14 @@ case "$UNAME_S" in
     *)          echo "Unsupported Operating System: $UNAME_S"; exit 1 ;;
 esac
 
+if [ "$OS" = "linux" ]; then
+    if [ "$(id -u)" = "0" ]; then
+        mount -o remount,rw / || true
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo mount -o remount,rw / || true
+    fi
+fi
+
 ARCH="$(uname -m)"
 
 # Normalize Arch
@@ -190,6 +198,14 @@ EOF
         echo "2. Connect manually:"
         echo "   wantasticd connect -config $CONF_FILE &"
         echo "--------------------------------------------------------"
+    fi
+fi
+
+if [ "$OS" = "linux" ]; then
+    if [ "$(id -u)" = "0" ]; then
+        mount -o remount,ro / || true
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo mount -o remount,ro / || true
     fi
 fi
 
