@@ -41,7 +41,7 @@ func (c *EncryptedCredentials) GetRequestMetadata(ctx context.Context, uri ...st
 	}, nil
 }
 
-// RequireTransportSecurity indicates whether TLS is required (Yes, highly recommended despite cipher)
+// RequireTransportSecurity indicates whether TLS is required
 func (c *EncryptedCredentials) RequireTransportSecurity() bool {
-	return true
+	return false
 }

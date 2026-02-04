@@ -64,7 +64,7 @@ func main() {
 func handleLogin() {
 	loginCmd := flag.NewFlagSet("login", flag.ExitOnError)
 	token := loginCmd.String("token", "", "Direct authentication token")
-	serverURL := loginCmd.String("server-url", "auth.wantastic.com:443", "Authentication server URL")
+	serverURL := loginCmd.String("server-url", "auth.wantastic.com:50051", "Authentication server URL")
 	installService := loginCmd.Bool("d", false, "Install and run as system service (daemon)")
 	loginCmd.Parse(os.Args[2:])
 
@@ -132,12 +132,8 @@ func runAgentWithConfig(cfg *config.Config) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	agt, err := agent.New(cfg)
+	agt, err := startAgentWithRetry(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to create agent: %v", err)
-	}
-
-	if err := agt.Start(ctx); err != nil {
 		log.Fatalf("Failed to start agent: %v", err)
 	}
 
@@ -207,12 +203,8 @@ func runAgent(configPath string, verbose bool) {
 		cfg.Verbose = true
 	}
 
-	agt, err := agent.New(cfg)
+	agt, err := startAgentWithRetry(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to create agent: %v", err)
-	}
-
-	if err := agt.Start(ctx); err != nil {
 		log.Fatalf("Failed to start agent: %v", err)
 	}
 
@@ -349,24 +341,22 @@ func getSession(ctx context.Context) (*Session, error) {
 		cfg, err := config.LoadFromFile(configPath)
 		if err == nil {
 			cfg.Verbose = false
-			agt, err := agent.New(cfg)
+			agt, err := startAgentWithRetry(ctx, cfg)
 			if err == nil {
-				if err := agt.Start(ctx); err == nil {
-					// Wait briefly for handshake
-					time.Sleep(1 * time.Second)
+				// Wait briefly for handshake
+				time.Sleep(1 * time.Second)
 
-					return &Session{
-						DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-							return agt.GetNetstack().DialContext(ctx, network, addr)
-						},
-						PingFunc: func(ctx context.Context, host string) (time.Duration, error) {
-							return agt.GetNetstack().Ping(ctx, host)
-						},
-						Close: func() {
-							agt.Stop()
-						},
-					}, nil
-				}
+				return &Session{
+					DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+						return agt.GetNetstack().DialContext(ctx, network, addr)
+					},
+					PingFunc: func(ctx context.Context, host string) (time.Duration, error) {
+						return agt.GetNetstack().Ping(ctx, host)
+					},
+					Close: func() {
+						agt.Stop()
+					},
+				}, nil
 			}
 		}
 	}
@@ -570,4 +560,35 @@ func handlePing() {
 	if err := ping.Run(ctx, sess.DialContext, sess, host, *count, *interval); err != nil {
 		log.Fatalf("Ping failed: %v", err)
 	}
+}
+
+func startAgentWithRetry(ctx context.Context, cfg *config.Config) (*agent.Agent, error) {
+	maxRetries := 10
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			log.Printf("Port %d in use, retrying with port %d...", cfg.Interface.ListenPort-1, cfg.Interface.ListenPort)
+		}
+
+		agt, err := agent.New(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("create agent: %w", err)
+		}
+
+		if err := agt.Start(ctx); err != nil {
+			lastErr = err
+			// Check for "address already in use"
+			if strings.Contains(err.Error(), "bind: address already in use") || strings.Contains(err.Error(), "address already in use") {
+				agt.Stop()
+				cfg.Interface.ListenPort++
+				continue
+			}
+			return nil, err
+		}
+
+		return agt, nil
+	}
+
+	return nil, fmt.Errorf("failed to start agent after %d attempts: %w", maxRetries, lastErr)
 }

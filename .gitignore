@@ -4,3 +4,4 @@ traditional_wg.conf
 wantasticd
 .modcache/
 .cache/
+wantastic.conf

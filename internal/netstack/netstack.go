@@ -40,6 +40,7 @@ type Netstack struct {
 	net           *virtstack.Net
 	mu            sync.RWMutex
 	listeners     map[int]net.Listener
+	udpListeners  map[int]net.PacketConn
 	negativeCache map[int]time.Time
 	peerCache     map[string]PeerInfo
 }
@@ -48,6 +49,7 @@ func New(cfg *config.Config) (*Netstack, error) {
 	return &Netstack{
 		config:        cfg,
 		listeners:     make(map[int]net.Listener),
+		udpListeners:  make(map[int]net.PacketConn),
 		negativeCache: make(map[int]time.Time),
 		peerCache:     make(map[string]PeerInfo),
 	}, nil
@@ -57,6 +59,22 @@ func (ns *Netstack) EnsurePortForward(proto string, port int) bool {
 	if proto == "icmp" {
 		// ICMP is usually handled internally by gvisor.
 		return true
+	}
+
+	if proto == "udp" {
+		ns.mu.RLock()
+		if ns.net == nil {
+			ns.mu.RUnlock()
+			return true
+		}
+		if _, exists := ns.udpListeners[port]; exists {
+			ns.mu.RUnlock()
+			return true
+		}
+		ns.mu.RUnlock()
+
+		go ns.ensureUDPListener(port)
+		return false
 	}
 
 	if proto != "tcp" {
@@ -92,13 +110,13 @@ func (ns *Netstack) EnsurePortForward(proto string, port int) bool {
 		var open bool
 
 		// Check IPv4 127.0.0.1
-		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", targetPort), 50*time.Millisecond)
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", targetPort), 200*time.Millisecond)
 		if err == nil {
 			c.Close()
 			open = true
 		} else {
 			// Check IPv6 [::1]
-			c, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", targetPort), 50*time.Millisecond)
+			c, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", targetPort), 200*time.Millisecond)
 			if err == nil {
 				c.Close()
 				open = true
@@ -145,6 +163,90 @@ func (ns *Netstack) EnsurePortForward(proto string, port int) bool {
 
 	// Return FALSE to drop the packet while we check
 	return false
+}
+
+func (ns *Netstack) ensureUDPListener(port int) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	if _, exists := ns.udpListeners[port]; exists {
+		return
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return
+	}
+
+	l, err := ns.net.ListenUDP(addr)
+	if err != nil {
+		return
+	}
+
+	ns.udpListeners[port] = l
+	log.Printf("JIT Listener active on UDP/%d", port)
+
+	go ns.proxyUDP(l, port)
+}
+
+func (ns *Netstack) proxyUDP(conn net.PacketConn, targetPort int) {
+	defer conn.Close()
+	defer func() {
+		ns.mu.Lock()
+		delete(ns.udpListeners, targetPort)
+		ns.mu.Unlock()
+	}()
+
+	// Sessions map: RemoteAddr("ip:port") -> *net.UDPConn (connected to 127.0.0.1:targetPort)
+	sessions := make(map[string]*net.UDPConn)
+	var sessionMu sync.Mutex
+
+	buf := make([]byte, 4096)
+
+	for {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute)) // Idle timeout for the whole listener
+		n, remoteAddr, err := conn.ReadFrom(buf)
+		if err != nil {
+			break
+		}
+
+		sessionMu.Lock()
+		sessConn, exists := sessions[remoteAddr.String()]
+		if !exists {
+			// Create new session
+			rConn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", targetPort))
+			if err != nil {
+				rConn, err = net.Dial("udp", fmt.Sprintf("[::1]:%d", targetPort))
+			}
+			if err == nil {
+				uConn := rConn.(*net.UDPConn)
+				sessConn = uConn
+				sessions[remoteAddr.String()] = uConn
+
+				// Start return path with shorter idle timeout
+				go func(rc *net.UDPConn, remAddr net.Addr) {
+					defer rc.Close()
+					rBuf := make([]byte, 4096)
+					for {
+						rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
+						rn, err := rc.Read(rBuf)
+						if err != nil {
+							sessionMu.Lock()
+							delete(sessions, remAddr.String())
+							sessionMu.Unlock()
+							return
+						}
+						conn.WriteTo(rBuf[:rn], remAddr)
+					}
+				}(uConn, remoteAddr)
+			}
+		}
+		sessionMu.Unlock()
+
+		if sessConn != nil {
+			sessConn.Write(buf[:n])
+		}
+	}
 }
 
 func (ns *Netstack) proxyConnection(remote net.Conn, port int) {
@@ -289,6 +391,10 @@ func (ns *Netstack) Stop() error {
 	for port, l := range ns.listeners {
 		l.Close()
 		delete(ns.listeners, port)
+	}
+	for port, l := range ns.udpListeners {
+		l.Close()
+		delete(ns.udpListeners, port)
 	}
 	return nil
 }

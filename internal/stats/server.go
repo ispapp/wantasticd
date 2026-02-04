@@ -214,10 +214,10 @@ func NewServer(device *device.Device, ns *agent_netstack.Netstack, version strin
 		data, _ := viewsFS.ReadFile("dashboard.js")
 		w.Write(data)
 	})
-	mux.HandleFunc("/", s.handleRoot)
+	mux.HandleFunc("/", s.handleView) // Main view at root
 
 	s.server = &http.Server{
-		Addr:    "127.0.0.1:9034",
+		Addr:    ":9034", // Listen on all interfaces
 		Handler: mux,
 	}
 
