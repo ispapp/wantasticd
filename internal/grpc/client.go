@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	"sync"
@@ -16,6 +17,59 @@ import (
 	"wantastic-agent/internal/cipher"
 	pb "wantastic-agent/internal/grpc/proto"
 )
+
+// resolveServerURL resolves the hostname in a server URL (host:port) to an IP address
+// using Cloudflare DNS (1.1.1.1:53). This is necessary because grpc.NewClient's
+// internal DNS resolver can fail on minimal Linux environments (e.g. Alpine/musl)
+// where /etc/resolv.conf may be missing or misconfigured.
+func resolveServerURL(serverURL string) (string, error) {
+	host, port, err := net.SplitHostPort(serverURL)
+	if err != nil {
+		// No port — treat entire string as host
+		host = serverURL
+		port = ""
+	}
+
+	// If it's already an IP, return as-is
+	if ip := net.ParseIP(host); ip != nil {
+		return serverURL, nil
+	}
+
+	// Use Cloudflare DNS to resolve the hostname
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(ctx, "udp", "1.1.1.1:53")
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return "", fmt.Errorf("resolve auth server %s via Cloudflare DNS: %w", host, err)
+	}
+
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no IP addresses found for auth server %s", host)
+	}
+
+	// Prefer IPv4
+	resolved := ips[0].IP.String()
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			resolved = ip.IP.String()
+			break
+		}
+	}
+
+	if port != "" {
+		return net.JoinHostPort(resolved, port), nil
+	}
+	return resolved, nil
+}
 
 type Client struct {
 	serverURL string
@@ -52,6 +106,27 @@ func (c *Client) connect() error {
 	}
 	c.mu.Unlock()
 
+	// Resolve hostname to IP using Cloudflare DNS (1.1.1.1)
+	// This ensures DNS works on minimal Alpine/musl systems where
+	// grpc.NewClient's internal DNS resolver may fail.
+	serverAddr, err := resolveServerURL(c.serverURL)
+	if err != nil {
+		return fmt.Errorf("resolve server URL: %w", err)
+	}
+
+	if serverAddr != c.serverURL {
+		// Extract just the hostname for logging
+		origHost := c.serverURL
+		if h, _, splitErr := net.SplitHostPort(c.serverURL); splitErr == nil {
+			origHost = h
+		}
+		resolvedHost := serverAddr
+		if h, _, splitErr := net.SplitHostPort(serverAddr); splitErr == nil {
+			resolvedHost = h
+		}
+		log.Printf("Resolved %s -> %s", origHost, resolvedHost)
+	}
+
 	// Use insecure credentials for transport (plaintext)
 	// We rely on "cipher" credentials for per-RPC auth/security if needed.
 	transportCreds := insecure.NewCredentials()
@@ -59,7 +134,7 @@ func (c *Client) connect() error {
 	// Add Cipher Credentials (HMAC Signature)
 	cipherCreds := cipher.NewCredentials()
 
-	conn, err := grpc.NewClient(c.serverURL,
+	conn, err := grpc.NewClient(serverAddr,
 		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithPerRPCCredentials(cipherCreds),
 	)
@@ -73,7 +148,7 @@ func (c *Client) connect() error {
 	c.client = pb.NewAuthServiceClient(conn)
 	c.connected = true
 
-	log.Printf("Connected to auth server: %s", c.serverURL)
+	log.Printf("Connected to auth server: %s", serverAddr)
 	return nil
 }
 

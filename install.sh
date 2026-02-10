@@ -131,7 +131,24 @@ rm -rf "$TMP_DIR"
 
 echo "Success! Wantasticd ($VERSION) installed to $INSTALL_PATH"
 
-# 5. Login & Connect Flow
+# 5. DNS Pre-check (Alpine/minimal Linux may lack /etc/resolv.conf)
+if [ "$OS" = "linux" ]; then
+    if [ ! -f /etc/resolv.conf ] || ! grep -q "nameserver" /etc/resolv.conf 2>/dev/null; then
+        echo ""
+        echo "⚠ No DNS nameservers found in /etc/resolv.conf"
+        echo "  Configuring Cloudflare DNS (1.1.1.1, 1.0.0.1)..."
+        if [ "$(id -u)" = "0" ]; then
+            printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > /etc/resolv.conf
+        elif command -v sudo >/dev/null 2>&1; then
+            printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" | sudo tee /etc/resolv.conf > /dev/null
+        else
+            echo "  Warning: Cannot write /etc/resolv.conf (not root and no sudo)."
+            echo "  DNS resolution may fail. The agent will try Cloudflare DNS directly."
+        fi
+    fi
+fi
+
+# 6. Login & Connect Flow
 echo ""
 echo "=== Initialization ==="
 TOKEN="$1"
