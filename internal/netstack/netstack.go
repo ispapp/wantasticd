@@ -264,21 +264,44 @@ func (ns *Netstack) proxyConnection(remote net.Conn, port int) {
 	}
 	defer local.Close()
 
-	// Bidirectional copy
+	// Bidirectional copy with graceful shutdown support
+	// We use a channel to track completion of each direction.
 	done := make(chan struct{}, 2)
+
 	go func() {
 		io.Copy(local, remote)
-		if tc, ok := local.(*net.TCPConn); ok {
-			tc.CloseWrite()
+		// Propagate EOF to local server
+		if cw, ok := local.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
+
 	go func() {
 		io.Copy(remote, local)
+		// Propagate EOF to remote client
+		if cw, ok := remote.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		}
 		done <- struct{}{}
 	}()
 
+	// Wait for the first direction to close
 	<-done
+
+	// Wait for the second direction to close, but with a timeout to prevent hanging forever
+	// if one side (e.g. a misbehaving client) stays open indefinitely.
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		// Both closed gracefully
+	case <-timer.C:
+		if ns.config.Verbose {
+			log.Printf("Proxy connection cleanup timed out for local port %d", port)
+		}
+	}
 }
 
 func (ns *Netstack) Start() error {
