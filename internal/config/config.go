@@ -428,7 +428,8 @@ func (c *Config) GenerateDeviceID() {
 	// Generate a stable, anonymous device ID.
 	id, err := machineid.ProtectedID("wantastic")
 	if err != nil {
-		log.Printf("Warning: could not generate a stable device ID, falling back to a random one. This device may be re-registered if the configuration is lost. Error: %v", err)
+		log.Printf("Warning: could not generate a stable device ID from system hardware: %v", err)
+		log.Printf("Falling back to a random device ID. This device may be re-registered if the configuration is lost.")
 		c.DeviceID = uuid.New().String()
 		return
 	}

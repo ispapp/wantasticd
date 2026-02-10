@@ -18,57 +18,17 @@ import (
 	pb "wantastic-agent/internal/grpc/proto"
 )
 
-// resolveServerURL resolves the hostname in a server URL (host:port) to an IP address
-// using Cloudflare DNS (1.1.1.1:53). This is necessary because grpc.NewClient's
-// internal DNS resolver can fail on minimal Linux environments (e.g. Alpine/musl)
-// where /etc/resolv.conf may be missing or misconfigured.
+// resolveServerURL ensures the server URL has a port, defaulting to 50051 if missing.
+// It does NOT perform DNS resolution, leaving that to the gRPC client.
 func resolveServerURL(serverURL string) (string, error) {
 	host, port, err := net.SplitHostPort(serverURL)
 	if err != nil {
-		// No port — treat entire string as host
+		// No port — treat entire string as host and use default port 50051
 		host = serverURL
-		port = ""
+		port = "50051"
 	}
 
-	// If it's already an IP, return as-is
-	if ip := net.ParseIP(host); ip != nil {
-		return serverURL, nil
-	}
-
-	// Use Cloudflare DNS to resolve the hostname
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 5 * time.Second}
-			return d.DialContext(ctx, "udp", "1.1.1.1:53")
-		},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	ips, err := resolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return "", fmt.Errorf("resolve auth server %s via Cloudflare DNS: %w", host, err)
-	}
-
-	if len(ips) == 0 {
-		return "", fmt.Errorf("no IP addresses found for auth server %s", host)
-	}
-
-	// Prefer IPv4
-	resolved := ips[0].IP.String()
-	for _, ip := range ips {
-		if ip.IP.To4() != nil {
-			resolved = ip.IP.String()
-			break
-		}
-	}
-
-	if port != "" {
-		return net.JoinHostPort(resolved, port), nil
-	}
-	return resolved, nil
+	return net.JoinHostPort(host, port), nil
 }
 
 type Client struct {
