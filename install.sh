@@ -15,11 +15,19 @@ case "$UNAME_S" in
     *)          echo "Unsupported Operating System: $UNAME_S"; exit 1 ;;
 esac
 
+NEED_REMOUNT_RO=0
 if [ "$OS" = "linux" ]; then
-    if [ "$(id -u)" = "0" ]; then
-        mount -o remount,rw / || true
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo mount -o remount,rw / || true
+    # Check if root filesystem is mounted read-only
+    # We grep for " / " mountpoint with "ro," or "ro " options
+    if grep -q " / .*[\( ]ro[\), ]" /proc/mounts 2>/dev/null || \
+       grep -q " / .* ro," /proc/mounts 2>/dev/null; then
+        
+        echo "Root filesystem is Read-Only. Attempting to remount RW..."
+        if [ "$(id -u)" = "0" ]; then
+            mount -o remount,rw / && NEED_REMOUNT_RO=1 || echo "  Warning: Failed to remount / as RW"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo mount -o remount,rw / && NEED_REMOUNT_RO=1 || echo "  Warning: Failed to remount / as RW (sudo)"
+        fi
     fi
 fi
 
@@ -66,7 +74,11 @@ echo "Latest version: $VERSION"
 BINARY_URL="${BASE_URL}/latest/wantasticd-${OS}-${ARCH}.tar.gz"
 
 # Create temp directory
-TMP_DIR=$(mktemp -d)
+if ! TMP_DIR=$(mktemp -d 2>/dev/null); th
+    echo "Warning: mktemp failed, trying local ./tmp directory"
+    mkdir -p ./tmp/wantastic_install
+    TMP_DIR="./tmp/wantastic_install"
+fi
 cd "$TMP_DIR"
 
 echo "Downloading ${BINARY_URL}..."
@@ -218,11 +230,13 @@ EOF
     fi
 fi
 
-if [ "$OS" = "linux" ]; then
+if [ "$OS" = "linux" ] && [ "$NEED_REMOUNT_RO" = "1" ]; then
+    echo ""
+    echo "Restoring / to Read-Only mode..."
     if [ "$(id -u)" = "0" ]; then
-        mount -o remount,ro / || true
+        mount -o remount,ro / || echo "  Warning: Failed to remount / as RO"
     elif command -v sudo >/dev/null 2>&1; then
-        sudo mount -o remount,ro / || true
+        sudo mount -o remount,ro / || echo "  Warning: Failed to remount / as RO (sudo)"
     fi
 fi
 

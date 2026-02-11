@@ -7,10 +7,12 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
@@ -87,9 +89,17 @@ func (c *Client) connect() error {
 		log.Printf("Resolved %s -> %s", origHost, resolvedHost)
 	}
 
-	// Use insecure credentials for transport (plaintext)
-	// We rely on "cipher" credentials for per-RPC auth/security if needed.
-	transportCreds := insecure.NewCredentials()
+	// Determine transport security based on port
+	var transportCreds credentials.TransportCredentials
+	if strings.HasSuffix(serverAddr, ":443") {
+		// Use TLS for port 443 (Cloudflare/HTTPS)
+		transportCreds = credentials.NewTLS(nil) // Uses system cert pool
+		log.Printf("Using TLS for connection to %s", serverAddr)
+	} else {
+		// Use insecure (plaintext) for other ports (e.g. 50051)
+		transportCreds = insecure.NewCredentials()
+		log.Printf("Using insecure (plaintext) connection to %s", serverAddr)
+	}
 
 	// Add Cipher Credentials (HMAC Signature)
 	cipherCreds := cipher.NewCredentials()

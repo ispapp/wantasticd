@@ -23,8 +23,26 @@ func GetSocketPath() string {
 	if path := os.Getenv("WANTASTIC_UNIX"); path != "" {
 		return path
 	}
+
+	// 1. Check User Home (Default)
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".wantastic", SocketName)
+	userPath := filepath.Join(home, ".wantastic", SocketName)
+	if _, err := os.Stat(userPath); err == nil {
+		return userPath
+	}
+
+	// 2. Check Global /var/run (for root daemon)
+	if _, err := os.Stat("/var/run/" + SocketName); err == nil {
+		return "/var/run/" + SocketName
+	}
+
+	// 3. Check /tmp (fallback)
+	if _, err := os.Stat("/tmp/" + SocketName); err == nil {
+		return "/tmp/" + SocketName
+	}
+
+	// Default to user path if nothing found (e.g. for creating new server)
+	return userPath
 }
 
 // Server listens on a unix socket and proxies dial requests to the netstack

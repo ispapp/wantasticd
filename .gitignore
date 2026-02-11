@@ -5,3 +5,4 @@ wantasticd
 .modcache/
 .cache/
 wantastic.conf
+tmp/wantastic_install/wantasticd.tar.gz
