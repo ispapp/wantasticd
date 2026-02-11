@@ -18,16 +18,19 @@ esac
 NEED_REMOUNT_RO=0
 if [ "$OS" = "linux" ]; then
     # Check if root filesystem is mounted read-only
-    # We grep for " / " mountpoint with "ro," or "ro " options
-    if grep -q " / .*[\( ]ro[\), ]" /proc/mounts 2>/dev/null || \
-       grep -q " / .* ro," /proc/mounts 2>/dev/null; then
-        
+    IS_RO=0
+    # Check standard ro option (ro,)
+    if grep -q " / .* ro," /proc/mounts 2>/dev/null; then
+        IS_RO=1
+    fi
+    # Check parenthesized options (ro) or space-separated (ro )
+    if grep -q " / .*[\( ]ro[\), ]" /proc/mounts 2>/dev/null; then
+        IS_RO=1
+    fi
+
+    if [ "$IS_RO" = "1" ]; then
         echo "Root filesystem is Read-Only. Attempting to remount RW..."
-        if [ "$(id -u)" = "0" ]; then
-            mount -o remount,rw / && NEED_REMOUNT_RO=1 || echo "  Warning: Failed to remount / as RW"
-        elif command -v sudo >/dev/null 2>&1; then
-            sudo mount -o remount,rw / && NEED_REMOUNT_RO=1 || echo "  Warning: Failed to remount / as RW (sudo)"
-        fi
+        mount -o remount,rw / && NEED_REMOUNT_RO=1 || echo "  Warning: Failed to remount / as RW"
     fi
 fi
 
@@ -74,7 +77,9 @@ echo "Latest version: $VERSION"
 BINARY_URL="${BASE_URL}/latest/wantasticd-${OS}-${ARCH}.tar.gz"
 
 # Create temp directory
-if ! TMP_DIR=$(mktemp -d 2>/dev/null); th
+# Create temp directory
+TMP_DIR=$(mktemp -d 2>/dev/null)
+if [ -z "$TMP_DIR" ]; then
     echo "Warning: mktemp failed, trying local ./tmp directory"
     mkdir -p ./tmp/wantastic_install
     TMP_DIR="./tmp/wantastic_install"
@@ -129,12 +134,8 @@ if [ -w "$INSTALL_DIR" ]; then
     chmod +x "$INSTALL_PATH"
 else
     echo "Elevation required..."
-    if ! command -v sudo >/dev/null 2>&1; then
-        echo "Error: Directory $INSTALL_DIR is not writable and 'sudo' is not available."
-        exit 1
-    fi
-    sudo mv "$EXTRACTED_BIN" "$INSTALL_PATH"
-    sudo chmod +x "$INSTALL_PATH"
+    mv "$EXTRACTED_BIN" "$INSTALL_PATH"
+    chmod +x "$INSTALL_PATH"
 fi
 
 # Cleanup
@@ -143,20 +144,12 @@ rm -rf "$TMP_DIR"
 
 echo "Success! Wantasticd ($VERSION) installed to $INSTALL_PATH"
 
-# 5. DNS Pre-check (Alpine/minimal Linux may lack /etc/resolv.conf)
+# 5. DNS Check (Always ensure 1.1.1.1 or 8.8.8.8 present)
 if [ "$OS" = "linux" ]; then
-    if [ ! -f /etc/resolv.conf ] || ! grep -q "nameserver" /etc/resolv.conf 2>/dev/null; then
-        echo ""
-        echo "⚠ No DNS nameservers found in /etc/resolv.conf"
-        echo "  Configuring Cloudflare DNS (1.1.1.1, 1.0.0.1)..."
-        if [ "$(id -u)" = "0" ]; then
-            printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" > /etc/resolv.conf
-        elif command -v sudo >/dev/null 2>&1; then
-            printf "nameserver 1.1.1.1\nnameserver 1.0.0.1\n" | sudo tee /etc/resolv.conf > /dev/null
-        else
-            echo "  Warning: Cannot write /etc/resolv.conf (not root and no sudo)."
-            echo "  DNS resolution may fail. The agent will try Cloudflare DNS directly."
-        fi
+    if ! grep -q "1.1.1.1" /etc/resolv.conf && ! grep -q "8.8.8.8" /etc/resolv.conf; then
+        echo "Adding reliable DNS (1.1.1.1, 8.8.8.8) to /etc/resolv.conf..."
+        # Try to append.
+        printf "\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n" >> /etc/resolv.conf || echo "  Warning: Failed to update /etc/resolv.conf"
     fi
 fi
 
@@ -187,7 +180,7 @@ else
         # Create Config Directory
         if [ ! -d "$CONF_DIR" ]; then
             echo "Creating config directory: $CONF_DIR"
-            if ! sudo mkdir -p "$CONF_DIR"; then
+            if ! mkdir -p "$CONF_DIR"; then
                  echo "Warning: Failed to create $CONF_DIR. Falling back to current directory."
                  CONF_DIR="$(pwd)"
                  CONF_FILE="${CONF_DIR}/wantastic_demo.conf"
@@ -197,7 +190,7 @@ else
         # Write Demo Config
         # We use tee to handle permission escalation if needed
         # This is a template based on standard WireGuard config
-        cat <<EOF | sudo tee "$CONF_FILE" > /dev/null
+        cat <<EOF | tee "$CONF_FILE" > /dev/null
 [Interface]
 # Replace with your Private Key
 PrivateKey = <YOUR_PRIVATE_KEY>
@@ -222,7 +215,7 @@ EOF
         echo "  $CONF_FILE"
         echo ""
         echo "1. Edit this file with your actual credentials:"
-        echo "   sudo nano $CONF_FILE"
+        echo "   nano $CONF_FILE"
         echo ""
         echo "2. Connect manually:"
         echo "   wantasticd connect -config $CONF_FILE &"
@@ -235,8 +228,6 @@ if [ "$OS" = "linux" ] && [ "$NEED_REMOUNT_RO" = "1" ]; then
     echo "Restoring / to Read-Only mode..."
     if [ "$(id -u)" = "0" ]; then
         mount -o remount,ro / || echo "  Warning: Failed to remount / as RO"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo mount -o remount,ro / || echo "  Warning: Failed to remount / as RO (sudo)"
     fi
 fi
 

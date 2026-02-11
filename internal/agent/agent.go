@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 	"wantastic-agent/internal/stats"
@@ -136,14 +139,20 @@ func (a *Agent) Start(ctx context.Context) error {
 		log.Printf("Warning: failed to start IPC server: %v", err)
 	}
 
+	// Start background workers
+	// We always run HealthCheck and DNSCheck (Linux)
+	workerCount := 2
 	if a.client != nil {
-		a.wg.Add(3)
+		workerCount += 2 // GRPC + ConfigMonitor
+	}
+	a.wg.Add(workerCount)
+
+	go a.runHealthCheck(ctx)
+	go a.runDNSCheck(ctx)
+
+	if a.client != nil {
 		go a.runGRPCClient(ctx)
-		go a.runHealthCheck(ctx)
 		go a.runConfigMonitor(ctx)
-	} else {
-		a.wg.Add(1)
-		go a.runHealthCheck(ctx)
 	}
 
 	return nil
@@ -265,6 +274,57 @@ func (a *Agent) runConfigMonitor(ctx context.Context) {
 	}
 }
 
+func (a *Agent) runDNSCheck(ctx context.Context) {
+	defer a.wg.Done()
+
+	// Only run on Linux
+	if runtime.GOOS != "linux" {
+		return
+	}
+
+	checkDNS := func() {
+		// Read /etc/resolv.conf
+		content, err := os.ReadFile("/etc/resolv.conf")
+		if err != nil {
+			return
+		}
+		s := string(content)
+
+		// Check if reliable DNS exists
+		if !strings.Contains(s, "1.1.1.1") && !strings.Contains(s, "8.8.8.8") {
+			// Append if running as root/privileged
+			f, err := os.OpenFile("/etc/resolv.conf", os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				// Likely permission denied if not root; silent fail is okay as we can't do anything
+				return
+			}
+			defer f.Close()
+
+			log.Println("DNS Worker: Adding reliable nameservers (1.1.1.1, 8.8.8.8) to /etc/resolv.conf")
+			if _, err := f.WriteString("\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n"); err != nil {
+				log.Printf("Warning: DNS worker failed to update resolv.conf: %v", err)
+			}
+		}
+	}
+
+	// Initial check
+	checkDNS()
+
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.stopCh:
+			return
+		case <-ticker.C:
+			checkDNS()
+		}
+	}
+}
+
 func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 	resp, err := a.client.GetConfiguration(ctx)
 	if err != nil {
@@ -273,10 +333,15 @@ func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 
 	if resp.UpdateAvailable {
 		log.Printf("Update available: %s -> %s", a.updater.GetCurrentVersion(), resp.UpdateVersion)
-		if err := a.updater.CheckAndUpdate(ctx, resp.UpdateVersion); err != nil {
+		updated, err := a.updater.CheckAndUpdate(ctx, resp.UpdateVersion)
+		if err != nil {
 			log.Printf("Self-update failed: %v", err)
-		} else {
-			log.Println("Self-update completed successfully")
+		} else if updated {
+			log.Println("Self-update completed successfully. Exiting to allow restart.")
+			// Stop all components gracefully
+			a.Stop()
+			// Exit the process so supervisor (e.g. systemd) restarts it with new binary
+			os.Exit(0)
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"reflect"
@@ -858,19 +859,24 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 	ns.mu.RUnlock()
 
 	if stack == nil {
-		log.Printf("Ping Error: Netstack not initialized")
+		if ns.config.Verbose {
+			log.Printf("Ping Error: Netstack not initialized")
+		}
 		return 0, net.ErrClosed
 	}
 
-	start := time.Now()
+	totalTimeout := 2 * time.Second
+	deadline := time.Now().Add(totalTimeout)
 
 	// 1. Try Real ICMP Ping (gvisor protocol "ping")
-	// For "ping" network, Dial returns a connection that behaves like a datagram socket.
-	// We MUST write an ICMP packet and read the reply to measure RTT.
 	conn, err := stack.DialContext(ctx, "ping", target)
 	if err == nil {
 		defer conn.Close()
-		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		conn.SetDeadline(deadline)
+
+		id := rand.Intn(0xffff) & 0xffff
+		seq := rand.Intn(0xffff) & 0xffff
+		start := time.Now()
 
 		// Construct ICMP Echo Request (Type 8, Code 0)
 		pkt := make([]byte, 12) // 8 byte header + 4 byte payload
@@ -878,10 +884,10 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 		pkt[1] = 0              // Code
 		pkt[2] = 0              // Checksum High
 		pkt[3] = 0              // Checksum Low
-		pkt[4] = 0              // ID High
-		pkt[5] = 1              // ID Low
-		pkt[6] = 0              // Seq High
-		pkt[7] = 1              // Seq Low
+		pkt[4] = byte(id >> 8)  // ID High
+		pkt[5] = byte(id)       // ID Low
+		pkt[6] = byte(seq >> 8) // Seq High
+		pkt[7] = byte(seq)      // Seq Low
 		copy(pkt[8:], []byte("WANT"))
 
 		// Checksum calculation (RFC 1071)
@@ -889,6 +895,7 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 		for i := 0; i < len(pkt)-1; i += 2 {
 			sum += uint32(pkt[i])<<8 | uint32(pkt[i+1])
 		}
+		// If length odd
 		if len(pkt)%2 == 1 {
 			sum += uint32(pkt[len(pkt)-1]) << 8
 		}
@@ -899,34 +906,44 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 		pkt[3] = byte(csum)
 
 		if _, err := conn.Write(pkt); err == nil {
-			buf := make([]byte, 1024)
-			// We might receive other ICMP packets (e.g. from other pings), so strictly we should match ID/Seq.
-			// But for a simple probe, just getting *any* packet back from the target is likely the reply.
-			if n, err := conn.Read(buf); err == nil && n >= 0 {
-				// Parse reply type
-				if n >= 1 {
-					typeByte := buf[0]
-					// 0 = Echo Reply. 8 = Echo Request (shouldn't see this). 3 = Dest Unreachable.
-					if typeByte == 0 {
-						return time.Since(start), nil
+			buf := make([]byte, 1500)
+			for {
+				conn.SetReadDeadline(deadline)
+				n, err := conn.Read(buf)
+				if err != nil {
+					break // Timeout or error
+				}
+				if n >= 8 {
+					// Check for Echo Reply (Type 0)
+					if buf[0] == 0 {
+						// Verify ID and Sequence to match request (Robustness)
+						recID := int(buf[4])<<8 | int(buf[5])
+						recSeq := int(buf[6])<<8 | int(buf[7])
+
+						if recID == id && recSeq == seq {
+							return time.Since(start), nil
+						}
+						// Mismatch: potentially stale packet or other ping; ignore and retry read
 					}
 				}
-				// Even if type is not 0 (e.g. 69?), getting a read return means network trip happened.
-				// But let's close enough.
-				return time.Since(start), nil
 			}
 		}
-		// Reset start if ICMP write/read failed but connect succeeded
-		start = time.Now()
 	}
 
 	// 2. Fallback: TCP SYN Probing (Accurate RTT because Dial waits for SYN-ACK)
 	// We avoid port 9034 to prevent hitting our own JIT listener if the target is local-ish.
-	ports := []string{"80", "443", "22", "3389", "8080", "9034"}
+	ports := []string{"80", "443", "22", "3389", "8080"}
 	for _, p := range ports {
 		pStart := time.Now()
-		// We use a short timeout for each probe
-		ctxT, cancel := context.WithTimeout(ctx, 1000*time.Millisecond)
+		// We use a short timeout for each probe, but respect overall deadline
+		timeout := time.Until(deadline)
+		if timeout < 100*time.Millisecond {
+			timeout = 200 * time.Millisecond
+		} else if timeout > 500*time.Millisecond {
+			timeout = 500 * time.Millisecond
+		}
+
+		ctxT, cancel := context.WithTimeout(ctx, timeout)
 		conn, err = stack.DialContext(ctxT, "tcp", net.JoinHostPort(target, p))
 		cancel()
 		if err == nil {

@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"wantastic-agent/internal/grpc"
@@ -428,13 +429,39 @@ func (c *Config) GenerateDeviceID() {
 	// Generate a stable, anonymous device ID.
 	id, err := machineid.ProtectedID("wantastic")
 	if err != nil {
-		log.Printf("Warning: could not generate a stable device ID from system hardware: %v", err)
-		log.Printf("Falling back to a random device ID. This device may be re-registered if the configuration is lost.")
-		c.DeviceID = uuid.New().String()
-		return
+		log.Printf("Warning: could not read system machine-id: %v", err)
+
+		// Fallback: Try to find a stable MAC address (common for embedded devices)
+		useMac := false
+		if ifaces, err := net.Interfaces(); err == nil {
+			// Sort interfaces by name for deterministic selection
+			sort.Slice(ifaces, func(i, j int) bool {
+				return ifaces[i].Name < ifaces[j].Name
+			})
+
+			for _, iface := range ifaces {
+				// Skip loopback, down interfaces, or those with no MAC
+				if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 || len(iface.HardwareAddr) == 0 {
+					continue
+				}
+
+				// Use the first valid MAC address found (e.g. eth0, wlan0)
+				id = iface.HardwareAddr.String()
+				log.Printf("Using MAC address of interface '%s' (%s) as stable device ID source.", iface.Name, id)
+				useMac = true
+				break
+			}
+		}
+
+		if !useMac {
+			log.Printf("Warning: no stable hardware identifier (machine-id or MAC) found.")
+			log.Printf("Falling back to a random device ID. This device may be re-registered if the configuration is lost.")
+			c.DeviceID = uuid.New().String()
+			return
+		}
 	}
 
-	// Hash the ID to protect privacy.
+	// Hash the ID to protect privacy (either machine-id or MAC).
 	hash := sha256.Sum256([]byte(id))
 	c.DeviceID = hex.EncodeToString(hash[:])
 }

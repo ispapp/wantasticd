@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func (m *Manager) FetchLatestVersion(ctx context.Context) (string, error) {
 }
 
 // RunUpdateScript executes the embedded self-update.sh script
-func (m *Manager) RunUpdateScript(ctx context.Context, targetVersion string) error {
+func (m *Manager) RunUpdateScript(ctx context.Context, targetVersion, binaryPath string) error {
 	scriptContent, err := updateScript.ReadFile("self-update.sh")
 	if err != nil {
 		return fmt.Errorf("read embedded script: %w", err)
@@ -83,8 +84,9 @@ func (m *Manager) RunUpdateScript(ctx context.Context, targetVersion string) err
 		return fmt.Errorf("chmod temp script: %w", err)
 	}
 
-	log.Printf("Running update script for version %s...", targetVersion)
-	cmd := exec.CommandContext(ctx, "/bin/sh", tmpFile.Name(), targetVersion)
+	log.Printf("Running update script for version %s (target: %s)...", targetVersion, binaryPath)
+	// Pass binaryPath as second argument
+	cmd := exec.CommandContext(ctx, "/bin/sh", tmpFile.Name(), targetVersion, binaryPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -99,13 +101,28 @@ func (m *Manager) shouldUpdate(targetVersion string) bool {
 	return m.currentVersion != targetVersion
 }
 
-func (m *Manager) CheckAndUpdate(ctx context.Context, targetVersion string) error {
+// CheckAndUpdate checks for updates and applies them. Returns true if updated.
+func (m *Manager) CheckAndUpdate(ctx context.Context, targetVersion string) (bool, error) {
 	if !m.shouldUpdate(targetVersion) {
 		log.Printf("Already running latest version: %s", m.currentVersion)
-		return nil
+		return false, nil
 	}
 
-	return m.RunUpdateScript(ctx, targetVersion)
+	execPath, err := os.Executable()
+	if err != nil {
+		return false, fmt.Errorf("failed to determine executable path: %w", err)
+	}
+
+	// Resolve symlinks just in case
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+
+	if err := m.RunUpdateScript(ctx, targetVersion, execPath); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (m *Manager) restart() error {

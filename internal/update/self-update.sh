@@ -48,11 +48,13 @@ else
 fi
 
 # Main update logic
+# Main update logic
 main() {
+    VERSION="$1"
+    TARGET_BIN="$2"
+
     # Get target version
-    if [ -n "$1" ]; then
-        VERSION="$1"
-    else
+    if [ -z "$VERSION" ]; then
         echo "Fetching latest version from ${LATEST_VERSION_URL}..."
         VERSION=$(curl -sSL "${LATEST_VERSION_URL}" | tr -d '[:space:]')
     fi
@@ -62,11 +64,27 @@ main() {
         exit 1
     fi
 
+    # Determine Binary Path
+    if [ -z "$TARGET_BIN" ]; then
+        if command -v wantasticd >/dev/null 2>&1; then
+            TARGET_BIN=$(command -v wantasticd)
+        elif [ -f "/usr/local/bin/wantasticd" ]; then
+            TARGET_BIN="/usr/local/bin/wantasticd"
+        elif [ -f "/usr/bin/wantasticd" ]; then
+            TARGET_BIN="/usr/bin/wantasticd"
+        elif [ -f "/bin/wantasticd" ]; then
+            TARGET_BIN="/bin/wantasticd"
+        else
+            echo "Error: Could not find existing wantasticd binary to update."
+            exit 1
+        fi
+    fi
+
     echo "Target version: ${VERSION}"
+    echo "Target binary: ${TARGET_BIN}"
     echo "Platform: ${OS}-${ARCH}"
 
     # Construct Download URL
-    # Structure: https://get.wantastic.app/latest/wantasticd-<os>-<arch>.tar.gz
     DOWNLOAD_URL="${BASE_URL}/latest/wantasticd-${OS}-${ARCH}.tar.gz"
     echo "Downloading from ${DOWNLOAD_URL}..."
 
@@ -85,7 +103,6 @@ main() {
     tar -xzf "${TMP_DIR}/package.tar.gz" -C "${TMP_DIR}"
 
     # Find the binary in the extracted files
-    # The tarball is expected to contain a binary named wantasticd-${ARCH} or just wantasticd
     NEW_BINARY=$(find "${TMP_DIR}" -name "wantasticd*" -type f -executable | head -n 1)
 
     if [ -z "$NEW_BINARY" ]; then
@@ -94,30 +111,21 @@ main() {
         exit 1
     fi
 
-    echo "Applying update to ${BINARY_PATH}..."
+    echo "Replacing ${TARGET_BIN}..."
     
-    # Determine if we need elevated permissions for the TARGET directory
-    TARGET_DIR=$(dirname "${BINARY_PATH}")
-    
-    if [ -w "${TARGET_DIR}" ] && ( [ ! -f "${BINARY_PATH}" ] || [ -w "${BINARY_PATH}" ] ); then
-        mv "${NEW_BINARY}" "${BINARY_PATH}"
-        chmod +x "${BINARY_PATH}"
-    else
-        echo "Elevation required for installation..."
-        if ! command -v sudo >/dev/null 2>&1; then
-             echo "Error: ${TARGET_DIR} is not writable and 'sudo' is not available."
-             exit 1
-        fi
-        sudo mv "${NEW_BINARY}" "${BINARY_PATH}"
-        sudo chmod +x "${BINARY_PATH}"
+    # Check writability
+    if [ ! -w "$(dirname "$TARGET_BIN")" ] && [ "$(id -u)" != "0" ]; then
+        echo "Warning: Directory $(dirname "$TARGET_BIN") is not writable and we are not root."
+        # Attempt anyway, might fail
     fi
 
-    echo "Successfully updated to ${VERSION}!"
-    
-    # Restart service if running (Linux systemd)
-    if [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active wantasticd >/dev/null 2>&1; then
-        echo "Restarting service..."
-        sudo systemctl restart wantasticd
+    # Move new binary into place (Atomic replacement on Linux usually)
+    if mv -f "${NEW_BINARY}" "${TARGET_BIN}"; then
+        chmod +x "${TARGET_BIN}"
+        echo "Successfully updated to ${VERSION}!"
+    else
+        echo "Error: Failed to replace binary. Check permissions."
+        exit 1
     fi
 }
 
