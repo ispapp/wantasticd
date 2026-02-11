@@ -892,6 +892,9 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 
 		// Checksum calculation (RFC 1071)
 		var sum uint32
+		// Ensure checksum zeroed
+		pkt[2] = 0
+		pkt[3] = 0
 		for i := 0; i < len(pkt)-1; i += 2 {
 			sum += uint32(pkt[i])<<8 | uint32(pkt[i+1])
 		}
@@ -923,7 +926,19 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 						if recID == id && recSeq == seq {
 							return time.Since(start), nil
 						}
-						// Mismatch: potentially stale packet or other ping; ignore and retry read
+						if ns.config.Verbose {
+							log.Printf("Ping mismatch: ID %d!=%d or Seq %d!=%d", recID, id, recSeq, seq)
+						}
+					} else if buf[0] == 3 {
+						// Destination Unreachable
+						return 0, fmt.Errorf("destination unreachable (code %d)", buf[1])
+					} else if buf[0] == 11 {
+						// Time Exceeded
+						return 0, fmt.Errorf("time exceeded")
+					} else {
+						if ns.config.Verbose {
+							log.Printf("Ping ignored: Type %d Code %d", buf[0], buf[1])
+						}
 					}
 				}
 			}
