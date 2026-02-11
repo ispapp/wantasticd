@@ -140,8 +140,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	// Start background workers
-	// We always run HealthCheck and DNSCheck (Linux)
-	workerCount := 2
+	// We always run HealthCheck, DNSCheck (Linux), and UpdateChecker
+	workerCount := 3
 	if a.client != nil {
 		workerCount += 2 // GRPC + ConfigMonitor
 	}
@@ -149,6 +149,7 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	go a.runHealthCheck(ctx)
 	go a.runDNSCheck(ctx)
+	go a.runUpdateChecker(ctx)
 
 	if a.client != nil {
 		go a.runGRPCClient(ctx)
@@ -325,6 +326,60 @@ func (a *Agent) runDNSCheck(ctx context.Context) {
 	}
 }
 
+func (a *Agent) runUpdateChecker(ctx context.Context) {
+	defer a.wg.Done()
+
+	// Initial check after short delay to let startup settle
+	initial := time.NewTimer(1 * time.Minute)
+	defer initial.Stop()
+
+	// Daily check
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	check := func() {
+		latest, err := a.updater.FetchLatestVersion(ctx)
+		if err != nil {
+			if a.config.Verbose {
+				log.Printf("Update check failed: %v", err)
+			}
+			return
+		}
+		a.performSelfUpdate(ctx, latest)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.stopCh:
+			return
+		case <-initial.C:
+			check()
+		case <-ticker.C:
+			check()
+		}
+	}
+}
+
+func (a *Agent) performSelfUpdate(ctx context.Context, version string) {
+	if version == "" {
+		return
+	}
+	updated, err := a.updater.CheckAndUpdate(ctx, version)
+	if err != nil {
+		log.Printf("Self-update failed: %v", err)
+		return
+	}
+	if updated {
+		log.Printf("Self-update to %s completed successfully. Exiting to allow restart.", version)
+		// Stop all components gracefully
+		a.Stop()
+		// Exit the process so supervisor (e.g. systemd) restarts it with new binary
+		os.Exit(0)
+	}
+}
+
 func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 	resp, err := a.client.GetConfiguration(ctx)
 	if err != nil {
@@ -332,17 +387,8 @@ func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 	}
 
 	if resp.UpdateAvailable {
-		log.Printf("Update available: %s -> %s", a.updater.GetCurrentVersion(), resp.UpdateVersion)
-		updated, err := a.updater.CheckAndUpdate(ctx, resp.UpdateVersion)
-		if err != nil {
-			log.Printf("Self-update failed: %v", err)
-		} else if updated {
-			log.Println("Self-update completed successfully. Exiting to allow restart.")
-			// Stop all components gracefully
-			a.Stop()
-			// Exit the process so supervisor (e.g. systemd) restarts it with new binary
-			os.Exit(0)
-		}
+		log.Printf("Update available via Config: %s -> %s", a.updater.GetCurrentVersion(), resp.UpdateVersion)
+		a.performSelfUpdate(ctx, resp.UpdateVersion)
 	}
 
 	if err := a.applyConfiguration(resp); err != nil {
