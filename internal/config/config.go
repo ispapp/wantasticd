@@ -25,27 +25,19 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// resolveEndpoint resolves a hostname to an IP address using Cloudflare DNS (1.1.1.1:53)
+// resolveEndpoint resolves a hostname to an IP address using the system's default DNS resolver.
+// This respects /etc/hosts, mDNS (.local), and all system DNS configuration.
 func resolveEndpoint(hostname string) (string, error) {
 	// Check if it's already an IP address
 	if ip := net.ParseIP(hostname); ip != nil {
 		return hostname, nil
 	}
 
-	// Create a custom resolver using Cloudflare DNS
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{}
-			return d.DialContext(ctx, "udp", "1.1.1.1:53")
-		},
-	}
-
-	// Resolve the hostname
+	// Use the system's default resolver
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ips, err := resolver.LookupIPAddr(ctx, hostname)
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
 	if err != nil {
 		return "", fmt.Errorf("resolve hostname %s: %w", hostname, err)
 	}
@@ -57,11 +49,13 @@ func resolveEndpoint(hostname string) (string, error) {
 	// Return the first IPv4 address if available, otherwise first IPv6
 	for _, ip := range ips {
 		if ip.IP.To4() != nil {
+			log.Printf("Resolved endpoint %s -> %s", hostname, ip.IP.String())
 			return ip.IP.String(), nil
 		}
 	}
 
 	// If no IPv4, return the first IPv6
+	log.Printf("Resolved endpoint %s -> %s", hostname, ips[0].IP.String())
 	return ips[0].IP.String(), nil
 }
 
@@ -74,6 +68,7 @@ type Config struct {
 	Interface  Interface `json:"interface"`
 	Auth       Auth      `json:"auth"`
 	Verbose    bool      `json:"verbose"`
+	AutoUpdate bool      `json:"auto_update"`
 }
 
 type Server struct {

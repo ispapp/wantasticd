@@ -103,7 +103,12 @@ main() {
     tar -xzf "${TMP_DIR}/package.tar.gz" -C "${TMP_DIR}"
 
     # Find the binary in the extracted files
-    NEW_BINARY=$(find "${TMP_DIR}" -name "wantasticd*" -type f -executable | head -n 1)
+    # macOS 'find' does not support -executable, use -perm instead
+    if [ "$OS" = "darwin" ]; then
+        NEW_BINARY=$(find "${TMP_DIR}" -name "wantasticd" -type f -perm +111 | head -n 1)
+    else
+        NEW_BINARY=$(find "${TMP_DIR}" -name "wantasticd" -type f -executable | head -n 1)
+    fi
 
     if [ -z "$NEW_BINARY" ]; then
         echo "Error: Could not find executable binary in the downloaded package"

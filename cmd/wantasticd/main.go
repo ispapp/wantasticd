@@ -121,7 +121,7 @@ func handleLogin() {
 		}
 
 		log.Println("Connecting...")
-		runAgent(configPath, false)
+		runAgent(configPath, false, false)
 	}
 }
 
@@ -158,19 +158,25 @@ func handleConnect() {
 	configPath := connectCmd.String("config", "", "Path to configuration file")
 	verbose := connectCmd.Bool("v", false, "Enable verbose logging and debug output")
 	installService := connectCmd.Bool("d", false, "Install and run as system service (daemon)")
+	autoUpdate := connectCmd.Bool("auto-update", false, "Enable automatic self-updates")
 	connectCmd.Parse(os.Args[2:])
 
 	if *configPath == "" {
-		// Use default if not specified
-		*configPath = "/etc/wantastic/config.conf"
-		if _, err := os.Stat(*configPath); os.IsNotExist(err) {
-			// Check for old default for backward compatibility or local fallback
-			altPath := "wantastic.conf"
-			if _, err := os.Stat(altPath); err == nil {
-				*configPath = altPath
-			} else {
-				// If neither exists, and no flag provided, we can't proceed but let's try to load default anyway
-				// and let LoadFromFile error out with a nice message if it fails
+		// If positional argument provided, use it as config path
+		if connectCmd.NArg() > 0 {
+			*configPath = connectCmd.Arg(0)
+		} else {
+			// Use default if not specified
+			*configPath = "/etc/wantastic/config.conf"
+			if _, err := os.Stat(*configPath); os.IsNotExist(err) {
+				// Check for old default for backward compatibility or local fallback
+				altPath := "wantastic.conf"
+				if _, err := os.Stat(altPath); err == nil {
+					*configPath = altPath
+				} else {
+					// If neither exists, and no flag provided, we can't proceed but let's try to load default anyway
+					// and let LoadFromFile error out with a nice message if it fails
+				}
 			}
 		}
 	}
@@ -184,10 +190,10 @@ func handleConnect() {
 		return
 	}
 
-	runAgent(*configPath, *verbose)
+	runAgent(*configPath, *verbose, *autoUpdate)
 }
 
-func runAgent(configPath string, verbose bool) {
+func runAgent(configPath string, verbose bool, autoUpdate bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -202,6 +208,8 @@ func runAgent(configPath string, verbose bool) {
 	if verbose {
 		cfg.Verbose = true
 	}
+
+	cfg.AutoUpdate = autoUpdate
 
 	agt, err := startAgentWithRetry(ctx, cfg)
 	if err != nil {
@@ -294,7 +302,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s <command> [arguments]\n", os.Args[0])
 	fmt.Fprintln(os.Stderr, "\nAvailable commands:")
 	fmt.Fprintln(os.Stderr, "  login      Authenticate and configure client")
-	fmt.Fprintln(os.Stderr, "  connect    Connect using a configuration file")
+	fmt.Fprintln(os.Stderr, "  connect    Connect using a configuration file (use --auto-update to enable self-updates)")
 	fmt.Fprintln(os.Stderr, "  update     Self-update to the latest version")
 	fmt.Fprintln(os.Stderr, "  ping       Ping a host")
 	fmt.Fprintln(os.Stderr, "  curl       Run curl")

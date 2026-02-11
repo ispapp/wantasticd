@@ -140,8 +140,11 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	// Start background workers
-	// We always run HealthCheck, DNSCheck (Linux), and UpdateChecker
-	workerCount := 3
+	// We always run HealthCheck and DNSCheck (Linux)
+	workerCount := 2
+	if a.config.AutoUpdate {
+		workerCount++ // UpdateChecker
+	}
 	if a.client != nil {
 		workerCount += 2 // GRPC + ConfigMonitor
 	}
@@ -149,7 +152,13 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	go a.runHealthCheck(ctx)
 	go a.runDNSCheck(ctx)
-	go a.runUpdateChecker(ctx)
+
+	if a.config.AutoUpdate {
+		log.Println("Auto-update enabled")
+		go a.runUpdateChecker(ctx)
+	} else {
+		log.Println("Auto-update disabled (use --auto-update to enable)")
+	}
 
 	if a.client != nil {
 		go a.runGRPCClient(ctx)
@@ -387,8 +396,12 @@ func (a *Agent) checkForConfigUpdates(ctx context.Context) error {
 	}
 
 	if resp.UpdateAvailable {
-		log.Printf("Update available via Config: %s -> %s", a.updater.GetCurrentVersion(), resp.UpdateVersion)
-		a.performSelfUpdate(ctx, resp.UpdateVersion)
+		if a.config.AutoUpdate {
+			log.Printf("Update available via Config: %s -> %s", a.updater.GetCurrentVersion(), resp.UpdateVersion)
+			a.performSelfUpdate(ctx, resp.UpdateVersion)
+		} else {
+			log.Printf("Update available: %s -> %s (auto-update disabled, run with --auto-update to enable)", a.updater.GetCurrentVersion(), resp.UpdateVersion)
+		}
 	}
 
 	if err := a.applyConfiguration(resp); err != nil {

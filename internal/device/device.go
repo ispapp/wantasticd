@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -73,7 +74,6 @@ func (d *Device) Start() error {
 	d.netstack = netstackInst
 	d.tunName = "userspace-tun"
 	d.tunDev = tunDev
-
 	// Wrap TUN for JIT Port Forwarding
 	tunDev = NewTunWrapper(tunDev, d.PortForwarder)
 
@@ -90,7 +90,25 @@ func (d *Device) Start() error {
 	if err := d.applyConfig(); err != nil {
 		return err
 	}
-	return wd.Up()
+
+	if err := wd.Up(); err != nil {
+		return fmt.Errorf("device up: %w", err)
+	}
+
+	// Diagnostic: dump device state after Up() to verify configuration
+	if ipcState, err := wd.IpcGet(); err == nil {
+		log.Printf("WireGuard device up. Peer endpoint: %s:%d, Listen port: %d",
+			d.config.Server.Endpoint, d.config.Server.Port, d.config.Interface.ListenPort)
+		// Check if peer is actually configured
+		if !strings.Contains(ipcState, "public_key=") {
+			log.Printf("WARNING: No peers configured in WireGuard device!")
+		}
+		if d.config.Verbose {
+			log.Printf("IPC state:\n%s", ipcState)
+		}
+	}
+
+	return nil
 }
 
 func (d *Device) Stop() error {
@@ -122,7 +140,7 @@ func (d *Device) Close() error { return d.Stop() }
 func (d *Device) applyConfig() error {
 	privHex, _ := base64ToHex(d.config.PrivateKey)
 
-	// Helper to generate the configuration string for a given port
+	// Helper to generate the full configuration string for a given port
 	genConfig := func(port int) string {
 		var conf strings.Builder
 		fmt.Fprintf(&conf, "private_key=%s\nlisten_port=%d\nreplace_peers=true\n", privHex, port)
@@ -142,15 +160,22 @@ func (d *Device) applyConfig() error {
 		return conf.String()
 	}
 
-	// Try with the configured port first
-	err := d.device.IpcSet(genConfig(d.config.Interface.ListenPort))
-	if err != nil && d.config.Interface.ListenPort != 0 {
-		log.Printf("Warning: failed to set listen_port %d (%v), falling back to random port", d.config.Interface.ListenPort, err)
-		d.config.Interface.ListenPort = 0
-		return d.device.IpcSet(genConfig(0))
+	// Check if the configured port is available before passing it to WireGuard.
+	// This avoids noisy ERROR logs from the WireGuard library when the port is in use.
+	port := d.config.Interface.ListenPort
+	if port != 0 {
+		probe, err := net.ListenPacket("udp4", fmt.Sprintf(":%d", port))
+		if err != nil {
+			log.Printf("Port %d in use, using random port", port)
+			port = 0
+			d.config.Interface.ListenPort = 0
+		} else {
+			probe.Close()
+		}
 	}
 
-	return err
+	// Apply the full configuration with the available port
+	return d.device.IpcSet(genConfig(port))
 }
 
 func (d *Device) UpdateConfig(cfg *pb.DeviceConfiguration) error {
