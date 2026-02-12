@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -341,7 +342,7 @@ func getSession(ctx context.Context) (*Session, error) {
 				return ipc.Dial(network, addr)
 			},
 			PingFunc: func(ctx context.Context, host string) (time.Duration, error) {
-				return ipc.Ping(host)
+				return ipc.Ping(ctx, host)
 			},
 			Close: func() {},
 		}, nil
@@ -562,7 +563,10 @@ func handlePing() {
 	}
 	host := pingCmd.Args()[0]
 
-	ctx := context.Background()
+	// Create a context that is cancelled on SIGINT (Ctrl+C)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	sess, err := getSession(ctx)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
@@ -570,6 +574,10 @@ func handlePing() {
 	defer sess.Close()
 
 	if err := ping.Run(ctx, sess.DialContext, sess, host, *count, *interval); err != nil {
+		// If cancelled by user, exit cleanly
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		log.Fatalf("Ping failed: %v", err)
 	}
 }

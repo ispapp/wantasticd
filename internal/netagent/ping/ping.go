@@ -27,12 +27,25 @@ type Stats struct {
 func Run(ctx context.Context, dial DialContext, pinger Pinger, host string, count int, interval time.Duration) error {
 	fmt.Printf("PING %s (%s): via wantasticd netstack\n", host, host)
 
+	// Create cancellable context for immediate shutdown on signal
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	stats := &Stats{
 		MinRTT: 1 * time.Hour,
 	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Forward signals to context cancellation
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -46,7 +59,10 @@ func Run(ctx context.Context, dial DialContext, pinger Pinger, host string, coun
 		err := tryPing(ctx, dial, pinger, host, &rtt)
 
 		if err != nil {
-			fmt.Printf("Request timeout for seq %d\n", seq)
+			// Don't print timeout if cancelled
+			if ctx.Err() == nil {
+				fmt.Printf("Request timeout for seq %d\n", seq)
+			}
 		} else {
 			stats.Received++
 			stats.TotalRTT += rtt
@@ -62,6 +78,12 @@ func Run(ctx context.Context, dial DialContext, pinger Pinger, host string, coun
 
 	seq := 1
 	for {
+		// Check context before probing
+		if ctx.Err() != nil {
+			printStats(host, stats)
+			return ctx.Err()
+		}
+
 		probe(seq)
 		if count > 0 && seq >= count {
 			break
@@ -69,9 +91,6 @@ func Run(ctx context.Context, dial DialContext, pinger Pinger, host string, coun
 		seq++
 
 		select {
-		case <-sigCh:
-			printStats(host, stats)
-			return nil
 		case <-ticker.C:
 		case <-ctx.Done():
 			printStats(host, stats)
@@ -101,7 +120,13 @@ func tryPing(ctx context.Context, dial DialContext, pinger Pinger, host string, 
 
 		conn, err := dial(ctxPing, "ping", host)
 		if err == nil {
+			// Ensure closure on context cancel to unblock Read
+			go func() {
+				<-ctxPing.Done()
+				conn.Close()
+			}()
 			defer conn.Close()
+
 			conn.SetDeadline(time.Now().Add(2 * time.Second))
 			msg := []byte("WANT")
 			if _, err := conn.Write(msg); err == nil {

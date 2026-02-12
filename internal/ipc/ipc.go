@@ -228,12 +228,24 @@ func Dial(network, target string) (net.Conn, error) {
 }
 
 // Ping performs an ICMP ping via the daemon
-func Ping(target string) (time.Duration, error) {
+func Ping(ctx context.Context, target string) (time.Duration, error) {
 	socketPath := GetSocketPath()
-	conn, err := net.Dial("unix", socketPath)
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return 0, err
 	}
+
+	// Ensure connection is closed on context cancellation to unblock ReadString
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
 	defer conn.Close()
 
 	fmt.Fprintf(conn, "PING %s\n", target)
@@ -241,6 +253,10 @@ func Ping(target string) (time.Duration, error) {
 	r := bufio.NewReader(conn)
 	resp, err := r.ReadString('\n')
 	if err != nil {
+		//Check context error first to return correct reason
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
 		return 0, fmt.Errorf("read ipc response: %w", err)
 	}
 

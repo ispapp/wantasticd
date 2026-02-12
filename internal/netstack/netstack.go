@@ -308,7 +308,8 @@ func (ns *Netstack) proxyConnection(remote net.Conn, port int) {
 func (ns *Netstack) Start() error {
 	ctx := context.Background()
 	go ns.reaper()
-	go ns.discoveryLoop(ctx)
+	// Disable discovery loop temporarily to prevent ICMP packet theft/race conditions with CLI ping
+	// go ns.discoveryLoop(ctx)
 	go ns.startMDNS(ctx)
 	return nil
 }
