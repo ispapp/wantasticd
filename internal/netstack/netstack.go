@@ -917,9 +917,13 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 				if err != nil {
 					break // Timeout or error
 				}
+				if ns.config.Verbose {
+					log.Printf("Ping Read: %d bytes", n)
+				}
 				if n >= 8 {
 					// Check for Echo Reply (Type 0)
-					if buf[0] == 0 {
+					switch buf[0] {
+					case 0:
 						// Verify ID and Sequence to match request (Robustness)
 						recID := int(buf[4])<<8 | int(buf[5])
 						recSeq := int(buf[6])<<8 | int(buf[7])
@@ -930,13 +934,13 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 						if ns.config.Verbose {
 							log.Printf("Ping mismatch: ID %d!=%d or Seq %d!=%d", recID, id, recSeq, seq)
 						}
-					} else if buf[0] == 3 {
+					case 3:
 						// Destination Unreachable
 						return 0, fmt.Errorf("destination unreachable (code %d)", buf[1])
-					} else if buf[0] == 11 {
+					case 11:
 						// Time Exceeded
 						return 0, fmt.Errorf("time exceeded")
-					} else {
+					default:
 						if ns.config.Verbose {
 							log.Printf("Ping ignored: Type %d Code %d", buf[0], buf[1])
 						}
