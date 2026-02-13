@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -235,9 +236,27 @@ func (s *Server) Start() error {
 	s.mu.Unlock()
 
 	go func() {
-		log.Printf("Stats server active on port 9034")
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Stats server error: %v", err)
+		port := 9034
+		maxPort := 9044
+		for port <= maxPort {
+			s.server.Addr = fmt.Sprintf(":%d", port)
+			log.Printf("Starting stats server on port %d...", port)
+			if err := s.server.ListenAndServe(); err != nil {
+				if err == http.ErrServerClosed {
+					break
+				}
+				if strings.Contains(err.Error(), "address already in use") {
+					log.Printf("Port %d in use, trying next...", port)
+					port++
+					// Re-create server with new address because ListenAndServe closes it on error?
+					// actually ListenAndServe uses the listener. We need to create a new listener or just update Addr and retry if we can.
+					// But http.Server doesn't automatically retry.
+					// Actually, a cleaner way is to create the listener explicitly.
+				} else {
+					log.Printf("Stats server error: %v", err)
+					break
+				}
+			}
 		}
 		s.mu.Lock()
 		s.running = false

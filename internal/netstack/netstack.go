@@ -879,6 +879,10 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 		seq := rand.Intn(0xffff) & 0xffff
 		start := time.Now()
 
+		if ns.config.Verbose {
+			log.Printf("[Ping Debug] Dialed ping endpoint for %s. ID=%d Seq=%d", target, id, seq)
+		}
+
 		// Construct ICMP Echo Request (Type 8, Code 0)
 		pkt := make([]byte, 12) // 8 byte header + 4 byte payload
 		pkt[0] = 8              // Type
@@ -910,15 +914,21 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 		pkt[3] = byte(csum)
 
 		if _, err := conn.Write(pkt); err == nil {
+			if ns.config.Verbose {
+				log.Printf("[Ping Debug] Packet written to %s", target)
+			}
 			buf := make([]byte, 1500)
 			for {
 				conn.SetReadDeadline(deadline)
 				n, err := conn.Read(buf)
 				if err != nil {
+					if ns.config.Verbose {
+						log.Printf("[Ping Debug] Read error from %s: %v", target, err)
+					}
 					break // Timeout or error
 				}
 				if ns.config.Verbose {
-					log.Printf("Ping Read: %d bytes", n)
+					log.Printf("[Ping Debug] Read %d bytes from %s", n, target)
 				}
 				if n >= 8 {
 					// Check for Echo Reply (Type 0)
@@ -929,6 +939,9 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 						recSeq := int(buf[6])<<8 | int(buf[7])
 
 						if recID == id && recSeq == seq {
+							if ns.config.Verbose {
+								log.Printf("[Ping Debug] Match! ID=%d Seq=%d", recID, recSeq)
+							}
 							return time.Since(start), nil
 						}
 						if ns.config.Verbose {
@@ -947,6 +960,14 @@ func (ns *Netstack) Ping(ctx context.Context, target string) (time.Duration, err
 					}
 				}
 			}
+		} else {
+			if ns.config.Verbose {
+				log.Printf("[Ping Debug] Write failed: %v", err)
+			}
+		}
+	} else {
+		if ns.config.Verbose {
+			log.Printf("[Ping Debug] Dial failed: %v", err)
 		}
 	}
 
