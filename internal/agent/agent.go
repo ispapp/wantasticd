@@ -70,7 +70,7 @@ func NewWithClient(cfg *config.Config, client *grpc.Client) (*Agent, error) {
 	// Initialize stats server
 	statsServer := stats.NewServer(dev, ns, version.Version)
 
-	ipcServer := ipc.NewServer(ns)
+	ipcServer := ipc.NewServer(ns, dev)
 
 	return &Agent{
 		config:   cfg,

@@ -56,6 +56,8 @@ func main() {
 		handleBind()
 	case "neighbors":
 		handleNeighbors()
+	case "status":
+		handleStatus()
 	default:
 		printUsage()
 		os.Exit(1)
@@ -311,7 +313,43 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  telnet     Run telnet")
 	fmt.Fprintln(os.Stderr, "  bind       Bind a local port to a remote endpoint")
 	fmt.Fprintln(os.Stderr, "  neighbors  Interact with neighbors (ls to list, sp to scan ports)")
+	fmt.Fprintln(os.Stderr, "  status     Show connection status")
 	fmt.Fprintln(os.Stderr, "  version    Show version information")
+}
+
+func handleStatus() {
+	status, err := ipc.GetStatus()
+	if err != nil {
+		log.Fatalf("Failed to get status: %v. Is the daemon running?", err)
+	}
+
+	fmt.Printf("Device ID: %s\n", status["id"])
+	fmt.Printf("Public Key: %s\n", status["public_key"])
+
+	connected := status["connected"].(bool)
+	if connected {
+		fmt.Println("Status: Connected (Handshake Active)")
+	} else {
+		fmt.Println("Status: Disconnected (No recent handshake)")
+	}
+
+	rx := int64(status["rx_bytes"].(float64))
+	tx := int64(status["tx_bytes"].(float64))
+
+	fmt.Printf("Transfer: Rx: %s, Tx: %s\n", formatBytes(rx), formatBytes(tx))
+}
+
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 // Session encapsulates a connection to the network, either via IPC or Ephemeral Agent

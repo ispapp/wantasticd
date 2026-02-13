@@ -3,6 +3,7 @@ package ipc
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"wantastic-agent/internal/device"
 	"wantastic-agent/internal/netstack"
 )
 
@@ -48,14 +50,16 @@ func GetSocketPath() string {
 // Server listens on a unix socket and proxies dial requests to the netstack
 type Server struct {
 	netstack *netstack.Netstack
+	device   *device.Device
 	listener net.Listener
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
 }
 
-func NewServer(ns *netstack.Netstack) *Server {
+func NewServer(ns *netstack.Netstack, dev *device.Device) *Server {
 	return &Server{
 		netstack: ns,
+		device:   dev,
 		stopCh:   make(chan struct{}),
 	}
 }
@@ -167,6 +171,31 @@ func (s *Server) handleConnection(c net.Conn) {
 			return
 		}
 		fmt.Fprintf(c, "OK %d\n", rtt.Nanoseconds())
+
+	case "STATUS":
+		if s.device == nil {
+			fmt.Fprintf(c, "ERROR device not available\n")
+			return
+		}
+		stats, err := s.device.GetStats()
+		if err != nil {
+			fmt.Fprintf(c, "ERROR get stats: %v\n", err)
+			return
+		}
+
+		// Also get data transfer stats
+		rx, tx, _ := s.device.GetTransferStats()
+		stats["rx_bytes"] = rx
+		stats["tx_bytes"] = tx
+		stats["public_key"] = s.device.GetPublicKey()
+
+		// Serialize to JSON
+		data, err := json.Marshal(stats)
+		if err != nil {
+			fmt.Fprintf(c, "ERROR marshal stats: %v\n", err)
+			return
+		}
+		fmt.Fprintf(c, "OK %s\n", string(data))
 
 	case "CURL":
 		req, err := http.NewRequest("GET", target, nil)
@@ -331,4 +360,33 @@ func (b *bufferedConn) SetReadDeadline(t time.Time) error {
 }
 func (b *bufferedConn) SetWriteDeadline(t time.Time) error {
 	return b.conn.SetWriteDeadline(t)
+}
+
+// GetStatus retrieves the status from the daemon
+func GetStatus() (map[string]any, error) {
+	socketPath := GetSocketPath()
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	fmt.Fprintf(conn, "STATUS\n")
+
+	r := bufio.NewReader(conn)
+	resp, err := r.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read ipc response: %w", err)
+	}
+
+	if strings.HasPrefix(resp, "OK") {
+		jsonStr := strings.TrimSpace(resp[3:])
+		var result map[string]any
+		if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+			return nil, fmt.Errorf("unmarshal status: %w", err)
+		}
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("ipc error: %s", strings.TrimSpace(resp))
 }
