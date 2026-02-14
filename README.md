@@ -50,3 +50,7 @@ wantasticd restart
 To check the status of the service, use the `status` command.
 ```
 wantasticd status
+
+# todo:
+- [ ] ports probing from server side should detect the 9034 too and make as part of host device open ports
+- [ ] stable busybox like commands communication with daemon throw sock 

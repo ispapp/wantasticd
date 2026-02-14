@@ -138,15 +138,21 @@ func (d *Device) Stop() error {
 func (d *Device) Close() error { return d.Stop() }
 
 func (d *Device) applyConfig() error {
-	privHex, _ := base64ToHex(d.config.PrivateKey)
+	privHex, err := base64ToHex(d.config.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("invalid private key: %w", err)
+	}
 
 	// Helper to generate the full configuration string for a given port
-	genConfig := func(port int) string {
+	genConfig := func(port int) (string, error) {
 		var conf strings.Builder
 		fmt.Fprintf(&conf, "private_key=%s\nlisten_port=%d\nreplace_peers=true\n", privHex, port)
 
 		if d.config.Server.PublicKey != "" {
-			pubHex, _ := base64ToHex(d.config.Server.PublicKey)
+			pubHex, err := base64ToHex(d.config.Server.PublicKey)
+			if err != nil {
+				return "", fmt.Errorf("invalid public key: %w", err)
+			}
 			fmt.Fprintf(&conf, "public_key=%s\nendpoint=%s:%d\n", pubHex, d.config.Server.Endpoint, d.config.Server.Port)
 			if len(d.config.Server.AllowedIPs) > 0 {
 				for _, ip := range d.config.Server.AllowedIPs {
@@ -157,7 +163,7 @@ func (d *Device) applyConfig() error {
 			}
 			conf.WriteString("persistent_keepalive_interval=25\n")
 		}
-		return conf.String()
+		return conf.String(), nil
 	}
 
 	// Check if the configured port is available before passing it to WireGuard.
@@ -175,7 +181,11 @@ func (d *Device) applyConfig() error {
 	}
 
 	// Apply the full configuration with the available port
-	return d.device.IpcSet(genConfig(port))
+	cfgStr, err := genConfig(port)
+	if err != nil {
+		return err
+	}
+	return d.device.IpcSet(cfgStr)
 }
 
 func (d *Device) UpdateConfig(cfg *pb.DeviceConfiguration) error {
