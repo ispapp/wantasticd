@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"os"
 
-	"golang.zx2c4.com/wireguard/tun"
+	"wantastic-agent/internal/device/wireguard-go/tun"
 )
 
 // TunWrapper wraps a real TUN device to inspect packet headers

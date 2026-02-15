@@ -17,7 +17,8 @@ import (
 	"wantastic-agent/internal/config"
 	pb "wantastic-agent/internal/grpc/proto"
 
-	virtstack "golang.zx2c4.com/wireguard/tun/netstack"
+	virtstack "wantastic-agent/internal/device/wireguard-go/tun/netstack"
+
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"

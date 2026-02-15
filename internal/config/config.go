@@ -77,6 +77,7 @@ type Server struct {
 	PublicKey           string   `json:"public_key"`
 	AllowedIPs          []string `json:"allowed_ips"`
 	PersistentKeepalive int      `json:"persistent_keepalive"`
+	SendStats           bool     `json:"send_stats"`
 }
 
 type Interface struct {
@@ -261,6 +262,7 @@ func LoadFromDeviceFlow(ctx context.Context, serverURL string) (*Config, error) 
 			PublicKey:           resp.ServerKey,
 			AllowedIPs:          resp.AllowedIps,
 			PersistentKeepalive: int(resp.PersistentKeepalive),
+			SendStats:           true,
 		},
 		Interface: Interface{
 			MTU:        int(resp.Mtu),

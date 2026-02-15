@@ -108,10 +108,8 @@ func (s *DeviceMetrics) UnmarshalBinary(data []byte) error {
 	readUVarint := func(name string) uint64 {
 		x, err := binary.ReadUvarint(buf)
 		if err != nil {
-			log.Printf("ReadUvarint error (%s): %v", name, err)
 			return 0
 		}
-		// log.Printf("Read (%s): %d", name, x)
 		return x
 	}
 

@@ -17,10 +17,11 @@ import (
 
 	wgdevice "wantastic-agent/internal/device/wireguard-go/device"
 
+	"wantastic-agent/internal/device/wireguard-go/conn"
+	"wantastic-agent/internal/device/wireguard-go/tun"
+	virtstack "wantastic-agent/internal/device/wireguard-go/tun/netstack"
+
 	"golang.org/x/crypto/curve25519"
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/tun"
-	virtstack "golang.zx2c4.com/wireguard/tun/netstack"
 )
 
 type Device struct {
@@ -37,6 +38,8 @@ type Device struct {
 	addedRoutes []string
 
 	PortForwarder func(string, int) bool
+
+	statsProvider func() []byte
 }
 
 func New(cfg *config.Config) (*Device, error) {
@@ -87,6 +90,9 @@ func (d *Device) Start() error {
 	wd := wgdevice.NewDevice(tunDev, conn.NewDefaultBind(), logger)
 	wd.DisableSomeRoamingForBrokenMobileSemantics()
 	wd.SetStatsHandler(d.handleStats)
+	if d.statsProvider != nil {
+		wd.SetStatsProvider(d.statsProvider)
+	}
 	d.device = wd
 
 	if err := d.applyConfig(); err != nil {
@@ -101,6 +107,24 @@ func (d *Device) Start() error {
 	if ipcState, err := wd.IpcGet(); err == nil {
 		log.Printf("WireGuard device up. Peer endpoint: %s:%d, Listen port: %d",
 			d.config.Server.Endpoint, d.config.Server.Port, d.config.Interface.ListenPort)
+
+		// Configure SendStats for the server peer if enabled
+		if d.config.Server.SendStats && d.config.Server.PublicKey != "" {
+			if pubKey, err := base64ToHex(d.config.Server.PublicKey); err == nil {
+				// Convert hex string back to byte array for NoisePublicKey
+				// Wait, the device API might expect something else or we can add a helper.
+				// Actually, let's add a SetPeerSendStats method to wgdevice.Device first.
+				if pk, err := hex.DecodeString(pubKey); err == nil && len(pk) == 32 {
+					var noiseKey [32]byte
+					copy(noiseKey[:], pk)
+					if peer := wd.LookupPeer(noiseKey); peer != nil {
+						peer.SendStatsEnabled.Store(true)
+						log.Printf("Enabled custom stats for peer %s", d.config.Server.PublicKey)
+					}
+				}
+			}
+		}
+
 		// Check if peer is actually configured
 		if !strings.Contains(ipcState, "public_key=") {
 			log.Printf("WARNING: No peers configured in WireGuard device!")
@@ -163,7 +187,7 @@ func (d *Device) applyConfig() error {
 			} else {
 				conf.WriteString("allowed_ip=0.0.0.0/0\nallowed_ip=::/0\n")
 			}
-			conf.WriteString("persistent_keepalive_interval=25\n")
+			conf.WriteString("persistent_keepalive_interval=20\n")
 		}
 		return conf.String(), nil
 	}
@@ -238,7 +262,13 @@ func (d *Device) SetStatsHandler(handler func(*wgdevice.Peer, []byte)) {
 }
 
 func (d *Device) SetStatsProvider(provider func() []byte) {
-	d.device.SetStatsProvider(provider)
+	d.statsProvider = provider
+	// If device is already running, apply immediately
+	d.mu.RLock()
+	if d.device != nil {
+		d.device.SetStatsProvider(provider)
+	}
+	d.mu.RUnlock()
 }
 
 func (d *Device) GetStats() (map[string]any, error) {
