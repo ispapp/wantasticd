@@ -129,8 +129,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Link the userspace netstack from the device to the netstack manager
 	a.netstack.SetNet(a.device.GetNetstack())
 	// Start stats server
-	if err := a.stats.Start(); err != nil {
-		log.Printf("Warning: failed to start stats server: %v", err)
+	if a.config.Verbose {
+		if err := a.stats.Start(); err != nil {
+			log.Printf("Warning: failed to start stats server: %v", err)
+		}
 	}
 	if err := a.netstack.Start(); err != nil {
 		a.device.Stop()

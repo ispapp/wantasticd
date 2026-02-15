@@ -8,3 +8,5 @@ wantastic.conf
 tmp/wantastic_install/wantasticd.tar.gz
 vendor/
 gobuild/
+.gocache/
+.gotmp/

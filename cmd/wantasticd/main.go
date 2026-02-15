@@ -206,7 +206,7 @@ func runAgent(configPath string, verbose bool, autoUpdate bool) {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	if verbose {
+	if verbose || os.Getenv("DEBUG_LEVEL") == "debug" {
 		cfg.Verbose = true
 	}
 
