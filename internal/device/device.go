@@ -103,27 +103,30 @@ func (d *Device) Start() error {
 		return fmt.Errorf("device up: %w", err)
 	}
 
+	// Configure SendStats for the server peer if enabled
+	if d.config.Server.SendStats && d.config.Server.PublicKey != "" {
+		if pubKey, err := base64ToHex(d.config.Server.PublicKey); err == nil {
+			if pk, err := hex.DecodeString(pubKey); err == nil && len(pk) == 32 {
+				var noiseKey [32]byte
+				copy(noiseKey[:], pk)
+				if peer := wd.LookupPeer(noiseKey); peer != nil {
+					peer.SendStatsEnabled.Store(true)
+					log.Printf("Enabled custom stats for peer %s", d.config.Server.PublicKey)
+				} else {
+					log.Printf("Warning: Peer %s not found to enable stats", d.config.Server.PublicKey)
+				}
+			} else {
+				log.Printf("Error decoding hex public key: %v", err)
+			}
+		} else {
+			log.Printf("Error converting base64 public key to hex: %v", err)
+		}
+	}
+
 	// Diagnostic: dump device state after Up() to verify configuration
 	if ipcState, err := wd.IpcGet(); err == nil {
 		log.Printf("WireGuard device up. Peer endpoint: %s:%d, Listen port: %d",
 			d.config.Server.Endpoint, d.config.Server.Port, d.config.Interface.ListenPort)
-
-		// Configure SendStats for the server peer if enabled
-		if d.config.Server.SendStats && d.config.Server.PublicKey != "" {
-			if pubKey, err := base64ToHex(d.config.Server.PublicKey); err == nil {
-				// Convert hex string back to byte array for NoisePublicKey
-				// Wait, the device API might expect something else or we can add a helper.
-				// Actually, let's add a SetPeerSendStats method to wgdevice.Device first.
-				if pk, err := hex.DecodeString(pubKey); err == nil && len(pk) == 32 {
-					var noiseKey [32]byte
-					copy(noiseKey[:], pk)
-					if peer := wd.LookupPeer(noiseKey); peer != nil {
-						peer.SendStatsEnabled.Store(true)
-						log.Printf("Enabled custom stats for peer %s", d.config.Server.PublicKey)
-					}
-				}
-			}
-		}
 
 		// Check if peer is actually configured
 		if !strings.Contains(ipcState, "public_key=") {
@@ -132,6 +135,8 @@ func (d *Device) Start() error {
 		if d.config.Verbose {
 			log.Printf("IPC state:\n%s", ipcState)
 		}
+	} else {
+		log.Printf("Warning: failed to get IPC state for diagnostics: %v", err)
 	}
 
 	return nil

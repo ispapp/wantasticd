@@ -234,6 +234,9 @@ func parseTraditionalWireGuardConfig(configData string) (Config, error) {
 		cfg.GenerateDeviceID()
 	}
 
+	// Default to sending stats for traditional configs (users can opt-out if we add a flag later)
+	cfg.Server.SendStats = true
+
 	return cfg, nil
 }
 
