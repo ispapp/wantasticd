@@ -15,9 +15,10 @@ import (
 	"wantastic-agent/internal/config"
 	pb "wantastic-agent/internal/grpc/proto"
 
+	wgdevice "wantastic-agent/internal/device/wireguard-go/device"
+
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
-	wgdevice "golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	virtstack "golang.zx2c4.com/wireguard/tun/netstack"
 )
@@ -85,6 +86,7 @@ func (d *Device) Start() error {
 
 	wd := wgdevice.NewDevice(tunDev, conn.NewDefaultBind(), logger)
 	wd.DisableSomeRoamingForBrokenMobileSemantics()
+	wd.SetStatsHandler(d.handleStats)
 	d.device = wd
 
 	if err := d.applyConfig(); err != nil {
@@ -229,6 +231,14 @@ func (d *Device) GetPublicKey() string {
 	var pub [32]byte
 	curve25519.ScalarBaseMult(&pub, &priv)
 	return base64.StdEncoding.EncodeToString(pub[:])
+}
+
+func (d *Device) SetStatsHandler(handler func(*wgdevice.Peer, []byte)) {
+	d.device.SetStatsHandler(handler)
+}
+
+func (d *Device) SetStatsProvider(provider func() []byte) {
+	d.device.SetStatsProvider(provider)
 }
 
 func (d *Device) GetStats() (map[string]any, error) {

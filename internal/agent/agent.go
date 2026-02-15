@@ -70,6 +70,9 @@ func NewWithClient(cfg *config.Config, client *grpc.Client) (*Agent, error) {
 	// Initialize stats server
 	statsServer := stats.NewServer(dev, ns, version.Version)
 
+	// Wire up stats provider
+	dev.SetStatsProvider(statsServer.GetSerializedMetrics)
+
 	ipcServer := ipc.NewServer(ns)
 
 	return &Agent{
